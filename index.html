@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<script>
+// =====================================================================
+// ===== THÔNG SỐ — SỬA Ở ĐÂY =====
+// Đây là thông số MẶC ĐỊNH khi dùng app lần đầu.
+// Lưu ý: sau này nếu bạn sửa trong màn "Cài đặt" của app, app sẽ dùng số
+// trong Cài đặt (lưu trên máy), không dùng số ở đây nữa.
+// =====================================================================
+const CONFIG = {
+  SL: 150,              // Cắt lỗ mỗi lệnh (Stop Loss), $
+  P1_TARGET: 8,         // Mục tiêu Vòng 1, % vốn ban đầu
+  P2_TARGET: 6,         // Mục tiêu Vòng 2, % vốn ban đầu
+  DAILY_DD: 4,          // Sụt giảm ngày (Daily drawdown), %
+  MAX_DD: 10,           // Sụt giảm tối đa (Max drawdown, static), % vốn ban đầu
+  MIN_DAYS: 3,          // Số ngày lãi tối thiểu mỗi vòng
+  MIN_DAYS_NEW: 4,      // Số ngày lãi mỗi kỳ payout funded (tài khoản mua từ NEW_RULE_DATE)
+  NEW_RULE_DATE: "2026-07-25", // Ngày bắt đầu áp luật 4 ngày lãi (năm-tháng-ngày)
+  DAY_WIN: 0.5,         // Ngưỡng ngày lãi, % vốn ban đầu (5k -> $25)
+  GOAT_GUARD: 2,        // Ngưỡng Goat Guard, % vốn ban đầu (5k -> $100)
+  PAYOUT_SPLIT: 100,    // Tỷ lệ chia lợi nhuận (Profit split), %. Bạn mua add-on 100%
+  PAYOUT_FIRST_DAYS: 14, // Số ngày sau khi lên Funded mới được rút lần đầu
+  PAYOUT_CAP: 6,        // Trần mỗi lần rút ở 2 lần rút đầu, % vốn ban đầu (5k -> $300)
+  PAYOUT_WARN_DAYS: 2,  // Payout chờ quá số ngày này thì cảnh báo vàng
+  DAY_RESET_TZ: "America/New_York", // Múi giờ tính ngày giao dịch
+  DAY_RESET_HOUR: 17,   // Giờ sang ngày mới theo New York (17 = 5PM)
+  ACCOUNT_PRICES: { 5000: 17, 8000: 56, 15000: 98, 25000: 158, 50000: 308, 100000: 478, 150000: 758 } // Giá gốc ($) để tự điền chi phí
+};
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="GFT Tracker">
+<title>GFT Tracker</title>
+<style>
+:root{
+  --bg:#f3f4f7; --card:#ffffff; --text:#15171c; --muted:#5d6470; --line:#dfe3e9; --chip:#eceff3;
+  --accent:#1f5eff;
+  --green:#12803c; --green-bg:#e2f5e9;
+  --red:#cf2a1e; --red-bg:#fdeceb;
+  --yellow:#8a5d00; --yellow-bg:#fff2cf;
+  --shadow:0 1px 2px rgba(0,0,0,.05),0 4px 14px rgba(0,0,0,.05);
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e1014; --card:#181b21; --text:#eef0f3; --muted:#9aa3af; --line:#2b3038; --chip:#232830;
+    --accent:#4d7dff;
+    --green:#41d17a; --green-bg:#12301f;
+    --red:#ff6b60; --red-bg:#3a1614;
+    --yellow:#f5c451; --yellow-bg:#352a0d;
+    --shadow:none;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e1014; --card:#181b21; --text:#eef0f3; --muted:#9aa3af; --line:#2b3038; --chip:#232830;
+  --accent:#4d7dff;
+  --green:#41d17a; --green-bg:#12301f;
+  --red:#ff6b60; --red-bg:#3a1614;
+  --yellow:#f5c451; --yellow-bg:#352a0d;
+  --shadow:none;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent}
+.wrap{max-width:640px;margin:0 auto;padding:16px 16px calc(40px + env(safe-area-inset-bottom))}
+b,.num{font-variant-numeric:tabular-nums}
+.muted{color:var(--muted)}
+.pos{color:var(--green)}
+.neg{color:var(--red)}
+
+header{margin-bottom:12px}
+header h1{font-size:22px;margin:0 0 2px}
+.daybar{color:var(--muted);font-size:15px}
+
+.banner{border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:15px}
+.banner.red{background:var(--red-bg);color:var(--red)}
+
+.overview{background:var(--card);border-radius:16px;padding:14px;box-shadow:var(--shadow);border:1px solid var(--line)}
+.ov-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;text-align:center}
+.ov-grid div{padding:4px 0}
+.ov-grid b{display:block;font-size:22px;line-height:1.2}
+.ov-grid span{font-size:15px;color:var(--muted)}
+.ov-line{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;border-top:1px solid var(--line);margin-top:10px;padding-top:10px;font-size:15px}
+.ov-todo{font-weight:600}
+.ov-todo.has{color:var(--yellow)}
+
+.chips{display:flex;gap:8px;overflow-x:auto;padding:14px 0 12px;scrollbar-width:none;margin:0 -16px;padding-left:16px;padding-right:16px}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;min-height:44px;padding:0 16px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--text);font:inherit;font-size:15px;cursor:pointer}
+.chip.on{background:var(--text);color:var(--bg);border-color:var(--text);font-weight:600}
+
+.card{background:var(--card);border-radius:16px;box-shadow:var(--shadow);border:1px solid var(--line);border-left:8px solid var(--acc);padding:14px 14px 12px;margin-bottom:12px}
+.card.done{opacity:.62}
+.card.dead{opacity:.55}
+.c-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.c-name{font-size:18px;font-weight:700}
+.c-sub{font-size:15px;color:var(--muted)}
+.tag{flex:none;font-size:14px;font-weight:700;padding:3px 10px;border-radius:999px;background:var(--chip)}
+.tag-F{background:var(--green-bg);color:var(--green)}
+.tag-dead{background:var(--red-bg);color:var(--red)}
+.c-bal{margin:10px 0 6px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.c-bal .big{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+.c-bal .chg{font-size:17px;font-weight:600}
+.bar{height:10px;border-radius:999px;background:var(--chip);overflow:hidden;margin:4px 0 8px}
+.bar i{display:block;height:100%;background:var(--acc);border-radius:999px}
+.row{display:flex;justify-content:space-between;flex-wrap:wrap;gap:2px 12px;font-size:15px;margin:4px 0}
+.row.sub{color:var(--muted)}
+.row.sub b{color:var(--text)}
+.dots{letter-spacing:2px;color:var(--green)}
+.dots .off{color:var(--line)}
+.alert{border-radius:10px;padding:8px 12px;margin-top:8px;font-size:15px;font-weight:600}
+.alert.red{background:var(--red-bg);color:var(--red)}
+.alert.green{background:var(--green-bg);color:var(--green)}
+.alert.yellow{background:var(--yellow-bg);color:var(--yellow)}
+.pill{display:inline-block;border-radius:999px;padding:4px 12px;font-size:15px;font-weight:600;margin-top:10px}
+.pill.yellow{background:var(--yellow-bg);color:var(--yellow)}
+.pill.green{background:var(--green-bg);color:var(--green)}
+.pill.grey{background:var(--chip);color:var(--muted)}
+.pill.red{background:var(--red-bg);color:var(--red)}
+.c-btns{display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-top:12px}
+
+.btn{min-height:48px;border-radius:12px;border:1px solid var(--line);background:var(--chip);color:var(--text);font:inherit;font-weight:600;padding:0 16px;cursor:pointer;width:100%}
+.btn.primary{background:var(--accent);color:#fff;border-color:transparent}
+.btn.danger{background:var(--red-bg);color:var(--red);border-color:transparent}
+.btn.armed{background:var(--red);color:#fff}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn.sm{min-height:44px;width:auto;padding:0 12px;font-size:15px}
+.foot{display:grid;gap:10px;margin-top:16px}
+.empty{background:var(--card);border:1px dashed var(--line);border-radius:16px;padding:24px 16px;text-align:center;color:var(--muted)}
+.saved-at{text-align:center;color:var(--muted);font-size:14px;margin-top:14px}
+
+/* Cửa sổ trượt từ dưới lên */
+.sheet-wrap{position:fixed;inset:0;z-index:50;display:flex;align-items:flex-end;justify-content:center}
+.sheet-wrap[hidden]{display:none}
+.backdrop{position:absolute;inset:0;background:rgba(0,0,0,.5)}
+.sheet{position:relative;width:100%;max-width:640px;max-height:92vh;max-height:92dvh;overflow:auto;background:var(--card);border-radius:20px 20px 0 0;padding:0 16px calc(20px + env(safe-area-inset-bottom));animation:up .2s ease-out}
+@keyframes up{from{transform:translateY(40%);opacity:0}to{transform:none;opacity:1}}
+@media (min-width:700px){.sheet-wrap{align-items:center}.sheet{border-radius:20px}}
+.sh-head{position:sticky;top:0;background:var(--card);display:flex;justify-content:space-between;align-items:center;padding:14px 0 10px;z-index:2}
+.sh-head h2{font-size:19px;margin:0}
+.x{min-width:44px;min-height:44px;border:0;background:var(--chip);color:var(--text);border-radius:999px;font-size:20px;cursor:pointer}
+.idblock{margin:0 -16px 16px;padding:22px 16px;background:var(--acc);color:var(--on)}
+.idblock .l1{font-size:24px;font-weight:800;line-height:1.2}
+.idblock .l2{font-size:18px;font-weight:600;margin-top:4px}
+.field{margin-bottom:14px}
+.field>label,.field>.lbl{display:block;font-size:15px;font-weight:600;margin-bottom:6px}
+.hint{font-size:14px;color:var(--muted);margin-top:4px}
+.hint.warn{color:var(--red)}
+input,select{width:100%;min-height:50px;font:inherit;font-size:18px;padding:0 12px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+input:focus,select:focus{outline:2px solid var(--accent);outline-offset:1px}
+input:disabled,select:disabled{opacity:.6}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.seg button{min-height:54px;border-radius:12px;border:2px solid var(--line);background:var(--bg);color:var(--text);font:inherit;font-size:18px;font-weight:700;cursor:pointer}
+.seg button.on.g{background:var(--green);border-color:var(--green);color:#fff}
+.seg button.on.r{background:var(--red);border-color:var(--red);color:#fff}
+.swatches{display:flex;flex-wrap:wrap;gap:10px}
+.sw{width:44px;height:44px;border-radius:999px;border:3px solid transparent;cursor:pointer;position:relative}
+.sw.on{border-color:var(--text);box-shadow:0 0 0 2px var(--card) inset}
+.sw.used::after{content:"";position:absolute;right:-2px;top:-2px;width:12px;height:12px;border-radius:999px;background:var(--card);border:2px solid var(--muted)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.summary{background:var(--chip);border-radius:12px;padding:12px;font-size:16px;margin-bottom:12px}
+.err{color:var(--red);font-weight:600;margin-bottom:10px;font-size:15px}
+.list{border-top:1px solid var(--line);margin-top:8px}
+.li{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:15px}
+h3{font-size:16px;margin:22px 0 4px}
+
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--text);color:var(--bg);padding:12px 18px;border-radius:12px;font-weight:600;z-index:80;max-width:calc(100% - 32px);box-shadow:0 6px 20px rgba(0,0,0,.25)}
+.toast[hidden]{display:none}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+
+<div class="sheet-wrap" id="sheet" hidden>
+  <div class="backdrop" data-action="close"></div>
+  <div class="sheet" role="dialog" aria-modal="true" id="sheetBody"></div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+'use strict';
+const STORE_KEY = 'gft-tracker-v1';
+// Bảng 10 màu nhận diện tài khoản
+const COLORS = ['#1f5eff','#e5484d','#12a150','#f5a524','#8e4ec6','#0aa5c6','#e93d82','#8a6240','#f76b15','#5b6472'];
+const PHASES = { P1:'Vòng 1', P2:'Vòng 2', F:'Funded' };
+const WD = ['CN','T2','T3','T4','T5','T6','T7'];
+
+let storageOk = true;
+let data = load();
+const ui = { filter:'active', rec:null, form:null };
+
+// ---------- Lưu / đọc dữ liệu ----------
+function load(){
+  let d = null;
+  try { const raw = localStorage.getItem(STORE_KEY); if (raw) d = JSON.parse(raw); }
+  catch(e){ storageOk = false; }
+  return normalize(d);
+}
+function normalize(d){
+  d = (d && typeof d === 'object') ? d : {};
+  const saved = d.settings || {};
+  const settings = { ...CONFIG, ...saved, ACCOUNT_PRICES:{ ...CONFIG.ACCOUNT_PRICES, ...(saved.ACCOUNT_PRICES || {}) } };
+  return {
+    version: 1,
+    settings,
+    accounts: Array.isArray(d.accounts) ? d.accounts : [],
+    results:  Array.isArray(d.results)  ? d.results  : [],
+    payouts:  Array.isArray(d.payouts)  ? d.payouts  : [],
+    updatedAt: d.updatedAt || 0
+  };
+}
+function save(){
+  data.updatedAt = Date.now();
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(data)); storageOk = true; }
+  catch(e){ storageOk = false; }
+  render();
+}
+
+// ---------- Tiện ích ----------
+const S = () => data.settings;
+const accById = id => data.accounts.find(a => a.id === id);
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const r2 = x => Math.round((+x || 0) * 100) / 100;
+function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtNum(n){ return Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 }); }
+function money(x){ const n = r2(x); return (n < 0 ? '−' : '') + '$' + fmtNum(n); }
+function signed(x){ const n = r2(x); return (n > 0 ? '+' : n < 0 ? '−' : '') + '$' + fmtNum(n); }
+function sizeLabel(size){ return (+size >= 1000 ? (+size / 1000) + 'k' : size); }
+function textOn(hex){
+  const h = hex.replace('#',''); const r = parseInt(h.substr(0,2),16), g = parseInt(h.substr(2,2),16), b = parseInt(h.substr(4,2),16);
+  return (0.299*r + 0.587*g + 0.114*b) > 165 ? '#111' : '#fff';
+}
+
+// ---------- Thời gian & ngày giao dịch (mốc 5PM New York) ----------
+function now(){ return window.__NOW != null ? +new Date(window.__NOW) : Date.now(); } // __NOW chỉ dùng để test
+function nyParts(ms){
+  const f = new Intl.DateTimeFormat('en-US', { timeZone:S().DAY_RESET_TZ, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23' });
+  const p = {}; for (const x of f.formatToParts(new Date(ms))) p[x.type] = x.value;
+  return { date:`${p.year}-${p.month}-${p.day}`, hour:(+p.hour) % 24, minute:+p.minute, second:+p.second };
+}
+function ymd(ds){ return ds.split('-').map(Number); }
+function addDays(ds, n){ const [y,m,d] = ymd(ds); return new Date(Date.UTC(y, m-1, d+n)).toISOString().slice(0,10); }
+function dow(ds){ const [y,m,d] = ymd(ds); return new Date(Date.UTC(y, m-1, d)).getUTCDay(); }
+function daysBetween(a, b){ const t = s => { const [y,m,d] = ymd(s); return Date.UTC(y, m-1, d); }; return Math.round((t(b) - t(a)) / 864e5); }
+// Thứ 7 / Chủ nhật không có phiên -> dồn sang thứ 2
+function rollWeekend(ds){ const w = dow(ds); return w === 6 ? addDays(ds, 2) : w === 0 ? addDays(ds, 1) : ds; }
+function tradingDayAt(ms){
+  const p = nyParts(ms);
+  return rollWeekend(p.hour >= S().DAY_RESET_HOUR ? addDays(p.date, 1) : p.date);
+}
+// Từ 5PM thứ 6 tới 5PM chủ nhật (giờ New York) coi là nghỉ cuối tuần
+function marketClosedAt(ms){
+  const p = nyParts(ms), w = dow(p.date), h = S().DAY_RESET_HOUR;
+  return (w === 5 && p.hour >= h) || w === 6 || (w === 0 && p.hour < h);
+}
+function nextResetMs(ms){
+  const p = nyParts(ms), [y,m,d] = ymd(p.date);
+  const offset = Date.UTC(y, m-1, d, p.hour, p.minute, p.second) - Math.floor(ms / 1000) * 1000;
+  let target = Date.UTC(y, m-1, d, S().DAY_RESET_HOUR, 0, 0);
+  if (p.hour >= S().DAY_RESET_HOUR) target += 864e5;
+  return target - offset;
+}
+function localDate(ms){ const t = new Date(ms); return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`; }
+function fmtDay(ds){ if (!ds) return ''; const [, m, d] = ds.split('-'); return `${WD[dow(ds)]} ${d}/${m}`; }
+function fmtTime(ms){ const t = new Date(ms); return `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`; }
+function fmtStamp(ms){ const t = new Date(ms); return `${fmtTime(ms)} ${String(t.getDate()).padStart(2,'0')}/${String(t.getMonth()+1).padStart(2,'0')}`; }
+
+// ---------- Công thức (mục 6 spec) ----------
+function compute(acc, today){
+  const s = S(), size = +acc.size;
+  const res = data.results.filter(r => r.accountId === acc.id && r.phase === acc.phase);
+  const trades = res.filter(r => r.kind !== 'adjust');               // dòng "đối chiếu số dư" không tính là lệnh
+  const pays = acc.phase === 'F' ? data.payouts.filter(p => p.accountId === acc.id) : [];
+  const balance = r2(size + res.reduce((t, r) => t + +r.pnl, 0) - pays.reduce((t, p) => t + +p.amount, 0));
+  const profit = r2(balance - size);
+  const target = acc.phase === 'P1' ? r2(size * s.P1_TARGET / 100) : acc.phase === 'P2' ? r2(size * s.P2_TARGET / 100) : 0;
+  const remain = Math.max(0, r2(target - profit));
+  const lastPay = pays.map(p => p.requestDate).sort().pop() || '';
+  const dayPnl = {};
+  for (const r of trades){
+    if (lastPay && r.tradingDay <= lastPay) continue;               // Funded: chỉ đếm ngày sau payout gần nhất
+    dayPnl[r.tradingDay] = r2((dayPnl[r.tradingDay] || 0) + +r.pnl);
+  }
+  const winDays = Object.values(dayPnl).filter(v => v >= r2(size * s.DAY_WIN / 100)).length;
+  const minDays = (acc.phase === 'F' && acc.purchaseDate && acc.purchaseDate >= s.NEW_RULE_DATE) ? s.MIN_DAYS_NEW : s.MIN_DAYS;
+  const floor = r2(size * (1 - s.MAX_DD / 100));
+  const buffer = r2(balance - floor);
+  const slLeft = buffer > 0 ? Math.ceil(buffer / s.SL - 1e-9) - 1 : 0;   // số lệnh SL còn chịu được mà chưa chạm sàn
+  const todayTrades = trades.filter(r => r.tradingDay === today);
+  const ready = acc.phase !== 'F' && remain <= 0 && winDays >= minDays;
+  const fundedDays = acc.phase === 'F' && acc.fundedDate ? daysBetween(acc.fundedDate, localDate(now())) : null;
+  return { balance, profit, target, remain, winDays, minDays, floor, buffer, slLeft, ready, fundedDays,
+           tradedToday: todayTrades.length > 0, todayPnl: r2(todayTrades.reduce((t, r) => t + +r.pnl, 0)) };
+}
+
+// ---------- Trang chính ----------
+function render(){
+  const ms = now(), today = tradingDayAt(ms), closed = marketClosedAt(ms);
+  const accs = data.accounts;
+  const comp = new Map(accs.map(a => [a.id, compute(a, today)]));
+  const active = accs.filter(a => a.status !== 'breached');
+  const cnt = { P1:0, P2:0, F:0 }; active.forEach(a => cnt[a.phase]++);
+  const notTraded = closed ? 0 : active.filter(a => !comp.get(a.id).tradedToday).length;
+  const cost = accs.reduce((t, a) => t + (+a.cost || 0), 0);
+  const paid = data.payouts.filter(p => p.status === 'paid').reduce((t, p) => t + (+(p.received ?? p.amount) || 0), 0);
+
+  let h = `<header><h1>GFT Tracker</h1><div class="daybar">`;
+  h += closed
+    ? `Cuối tuần, thị trường đóng · Ngày giao dịch tiếp theo: <b>${fmtDay(today)}</b>`
+    : `Ngày giao dịch: <b>${fmtDay(today)}</b> · sang ngày mới lúc <b>${fmtTime(nextResetMs(ms))}</b> (giờ máy)`;
+  h += `</div></header>`;
+  if (!storageOk) h += `<div class="banner red">⚠ Không lưu được dữ liệu trên trình duyệt này (có thể đang ở chế độ ẩn danh). Dữ liệu sẽ mất khi đóng trang.</div>`;
+
+  h += `<section class="overview">
+    <div class="ov-grid">
+      <div><b>${accs.length}</b><span>Tổng</span></div>
+      <div><b>${cnt.P1}</b><span>Vòng 1</span></div>
+      <div><b>${cnt.P2}</b><span>Vòng 2</span></div>
+      <div><b>${cnt.F}</b><span>Funded</span></div>
+      <div><b>${accs.length - active.length}</b><span>Cháy</span></div>
+    </div>
+    <div class="ov-line"><span class="ov-todo ${notTraded ? 'has' : ''}">${closed ? 'Cuối tuần — nghỉ' : `Chưa đánh hôm nay: ${notTraded}`}</span></div>
+    <div class="ov-line"><span>Vốn đã bỏ ra <b>${money(cost)}</b></span><span>Payout đã về <b>${money(paid)}</b></span></div>
+  </section>`;
+
+  const chips = [['active','Đang chạy'],['P1','Vòng 1'],['P2','Vòng 2'],['F','Funded'],['breached','Cháy']];
+  h += `<nav class="chips">${chips.map(([k, t]) => `<button class="chip ${ui.filter === k ? 'on' : ''}" data-action="filter" data-v="${k}">${t}</button>`).join('')}</nav>`;
+
+  const list = accs.filter(a => {
+    if (ui.filter === 'breached') return a.status === 'breached';
+    if (a.status === 'breached') return false;
+    return ui.filter === 'active' || a.phase === ui.filter;
+  }).sort((a, b) => {
+    // Chưa đánh hôm nay lên trước; trong mỗi nhóm giữ thứ tự đánh cố định của bạn
+    const ta = comp.get(a.id).tradedToday ? 1 : 0, tb = comp.get(b.id).tradedToday ? 1 : 0;
+    return (ta - tb) || ((+a.order || 0) - (+b.order || 0)) || a.label.localeCompare(b.label);
+  });
+
+  if (!accs.length) h += `<div class="empty">Chưa có tài khoản nào.<br>Bấm <b>+ Thêm tài khoản</b> ở dưới để bắt đầu.</div>`;
+  else if (!list.length) h += `<div class="empty">Không có tài khoản nào trong mục này.</div>`;
+  else h += list.map(a => card(a, comp.get(a.id), closed)).join('');
+
+  h += `<div class="foot"><button class="btn primary" data-action="add-account">+ Thêm tài khoản</button></div>`;
+  if (data.updatedAt) h += `<div class="saved-at">Dữ liệu lưu trên máy này · sửa lần cuối ${fmtStamp(data.updatedAt)}</div>`;
+  document.getElementById('app').innerHTML = h;
+}
+
+function dots(won, need){
+  let s = ''; const n = Math.max(won, need);
+  for (let i = 0; i < n; i++) s += i < won ? '●' : '<span class="off">●</span>';
+  return `<span class="dots">${s}</span>`;
+}
+
+function card(a, c, closed){
+  const dead = a.status === 'breached', s = S();
+  let h = `<article class="card ${dead ? 'dead' : (!closed && c.tradedToday ? 'done' : '')}" style="--acc:${esc(a.color)}">`;
+  h += `<div class="c-top"><div><div class="c-name">${esc(a.label)}</div>
+        <div class="c-sub">${sizeLabel(a.size)} · ${a.login4 ? 'login …' + esc(a.login4) : 'chưa nhập login'}</div></div>
+        <span class="tag ${dead ? 'tag-dead' : 'tag-' + a.phase}">${dead ? 'Đã cháy · ' + PHASES[a.phase] : PHASES[a.phase]}</span></div>`;
+  h += `<div class="c-bal"><span class="big">${money(c.balance)}</span>
+        <span class="chg ${c.profit > 0 ? 'pos' : c.profit < 0 ? 'neg' : 'muted'}">${signed(c.profit)}</span></div>`;
+
+  if (a.phase !== 'F'){
+    const pct = c.target > 0 ? Math.max(0, Math.min(1, c.profit / c.target)) * 100 : 0;
+    h += `<div class="bar"><i style="width:${pct}%"></i></div>`;
+    h += `<div class="row"><span>${c.remain > 0 ? `Còn thiếu <b>${money(c.remain)}</b> / ${money(c.target)}` : `<b class="pos">Đã đạt mục tiêu ${money(c.target)}</b>`}</span>
+          <span>Ngày lãi ${dots(c.winDays, c.minDays)} <b>${c.winDays}/${c.minDays}</b></span></div>`;
+  } else {
+    h += `<div class="row"><span>Funded${c.fundedDays != null ? ` <b>${c.fundedDays}</b> ngày` : ''}</span>
+          <span>Ngày lãi kỳ này ${dots(c.winDays, c.minDays)} <b>${c.winDays}/${c.minDays}</b></span></div>`;
+  }
+  h += `<div class="row sub"><span>Đệm tới sàn (Buffer) <b>${money(c.buffer)}</b></span><span>Chịu thêm <b>${c.slLeft}</b> lệnh SL</span></div>`;
+
+  if (!dead){
+    if (c.slLeft <= 1) h += `<div class="alert red">⚠ Sát sàn: chỉ còn chịu ${c.slLeft} lệnh SL (sàn ${money(c.floor)})</div>`;
+    if (c.ready) h += `<div class="alert green">✓ Đủ điều kiện lên vòng</div>`;
+    if (a.phase === 'F' && s.SL > a.size * s.GOAT_GUARD / 100)
+      h += `<span class="pill red">Goat Guard: SL ${money(s.SL)} > ngưỡng ${money(a.size * s.GOAT_GUARD / 100)}</span> `;
+    if (closed) h += `<span class="pill grey">Cuối tuần — thị trường đóng</span>`;
+    else h += c.tradedToday
+      ? `<span class="pill green">Đã đánh hôm nay ${signed(c.todayPnl)}</span>`
+      : `<span class="pill yellow">Chưa đánh hôm nay</span>`;
+    h += `<div class="c-btns"><button class="btn primary" data-action="record" data-id="${a.id}">Ghi kết quả</button>
+          <button class="btn" data-action="manage" data-id="${a.id}">Quản lý</button></div>`;
+  } else {
+    h += `<div class="c-btns" style="grid-template-columns:1fr"><button class="btn" data-action="manage" data-id="${a.id}">Quản lý</button></div>`;
+  }
+  return h + `</article>`;
+}
+
+// ---------- Cửa sổ trượt ----------
+function openSheet(html){
+  document.getElementById('sheetBody').innerHTML = html;
+  document.getElementById('sheet').hidden = false;
+  document.body.style.overflow = 'hidden';
+}
+function closeSheet(){
+  document.getElementById('sheet').hidden = true;
+  document.body.style.overflow = '';
+  ui.rec = null; ui.form = null;
+}
+function sheetHead(title){ return `<div class="sh-head"><h2>${title}</h2><button class="x" data-action="close" aria-label="Đóng">✕</button></div>`; }
+let toastTimer;
+function toast(msg){
+  const t = document.getElementById('toast'); t.textContent = msg; t.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 3200);
+}
+
+// ---------- Ghi kết quả ----------
+function defaultDir(day){
+  const t = data.results.filter(r => r.kind !== 'adjust' && r.tradingDay === day && r.dir).sort((a, b) => b.createdAt - a.createdAt)[0];
+  return t ? t.dir : null;
+}
+function openRecord(id){
+  const today = tradingDayAt(now());
+  ui.rec = { id, day: today, dir: defaultDir(today), dirTouched:false, out:null, amount:'', autoAmount:false };
+  renderRecord();
+}
+function renderRecord(){
+  const r = ui.rec, a = accById(r.id);
+  let h = sheetHead('Ghi kết quả');
+  h += `<div class="idblock" style="--acc:${esc(a.color)};--on:${textOn(a.color)}">
+          <div class="l1">${esc(a.label)}</div>
+          <div class="l2">${a.login4 ? 'login …' + esc(a.login4) : 'chưa nhập login'} · ${PHASES[a.phase]}</div>
+        </div>`;
+  h += `<div class="field"><label for="r-day">Ngày giao dịch (theo mốc 5PM New York)</label>
+        <input type="date" id="r-day" value="${r.day}" max="${tradingDayAt(now())}">
+        <div class="hint">${fmtDay(r.day)}${r.day === tradingDayAt(now()) ? ' — hôm nay' : ''}</div></div>`;
+  h += `<div class="field"><div class="lbl">Hướng lệnh</div><div class="seg">
+          <button class="g ${r.dir === 'L' ? 'on' : ''}" data-action="rec-dir" data-v="L">▲ Long</button>
+          <button class="r ${r.dir === 'S' ? 'on' : ''}" data-action="rec-dir" data-v="S">▼ Short</button></div>
+        ${r.dir && !r.dirTouched ? '<div class="hint">Tự chọn theo hướng đã ghi trước đó trong ngày</div>' : ''}</div>`;
+  h += `<div class="field"><div class="lbl">Kết quả</div><div class="seg">
+          <button class="g ${r.out === 'W' ? 'on' : ''}" data-action="rec-out" data-v="W">Thắng</button>
+          <button class="r ${r.out === 'L' ? 'on' : ''}" data-action="rec-out" data-v="L">Thua</button></div></div>`;
+  h += `<div class="field"><label for="r-amt">Số tiền ($, luôn nhập số dương)</label>
+        <input type="number" id="r-amt" inputmode="decimal" min="0" step="0.01" placeholder="Ví dụ 300" value="${esc(r.amount)}">
+        <div class="hint">Nhập số lãi/lỗ <b>đã trừ phí</b> đúng như MT5 hiện.</div></div>`;
+  h += `<div class="summary" id="r-sum"></div>`;
+  h += `<button class="btn primary" id="r-save" data-action="rec-save">Lưu</button>`;
+  openSheet(h);
+  updateRecord();
+}
+function recordValid(){ const r = ui.rec; return r && r.day && r.dir && r.out && +r.amount > 0; }
+function updateRecord(){
+  const r = ui.rec; if (!r) return;
+  const a = accById(r.id);
+  const sum = document.getElementById('r-sum');
+  if (recordValid()){
+    const pnl = r.out === 'W' ? +r.amount : -r.amount;
+    const c = compute(a, r.day);
+    sum.innerHTML = `Sẽ ghi: <b class="${pnl > 0 ? 'pos' : 'neg'}">${r.out === 'W' ? 'Thắng' : 'Thua'} ${signed(pnl)}</b> · ${r.dir === 'L' ? 'Long' : 'Short'} · ${fmtDay(r.day)}<br>
+                     Số dư sau khi lưu: <b>${money(c.balance + pnl)}</b>`;
+  } else {
+    sum.textContent = 'Chọn hướng, kết quả và nhập số tiền.';
+  }
+  document.getElementById('r-save').disabled = !recordValid();
+}
+function saveRecord(){
+  if (!recordValid()) return;
+  const r = ui.rec, a = accById(r.id);
+  const pnl = r2(r.out === 'W' ? +r.amount : -r.amount);
+  data.results.push({ id:uid(), accountId:a.id, phase:a.phase, tradingDay:r.day, dir:r.dir, pnl, kind:'trade', createdAt:Date.now() });
+  closeSheet(); save();
+  toast(`Đã lưu ${a.label}: ${signed(pnl)} → số dư ${money(compute(a, r.day).balance)}`);
+}
+
+// ---------- Thêm / sửa tài khoản ----------
+function openAccountForm(id){
+  const a = id ? accById(id) : null;
+  const usedBy = {};
+  data.accounts.filter(x => x.status !== 'breached' && x.id !== id).forEach(x => usedBy[x.color] = x.label);
+  const maxOrder = data.accounts.reduce((m, x) => Math.max(m, +x.order || 0), 0);
+  const v = a || { label:`GFT 5k #${data.accounts.length + 1}`, login4:'', size:5000, cost:S().ACCOUNT_PRICES[5000] ?? '',
+                   purchaseDate:localDate(now()), phase:'P1', fundedDate:'', order:maxOrder + 1 };
+  ui.form = { id, color: a ? a.color : (COLORS.find(c => !usedBy[c]) || COLORS[0]), usedBy, costTouched: !!a, labelTouched: !!a };
+  const sizes = Object.keys(S().ACCOUNT_PRICES).map(Number).sort((x, y) => x - y);
+
+  let h = sheetHead(a ? 'Sửa tài khoản' : 'Thêm tài khoản');
+  h += `<div class="field"><label for="f-label">Tên hiển thị</label><input id="f-label" value="${esc(v.label)}" maxlength="40"></div>`;
+  h += `<div class="field"><label for="f-login">4 số cuối login MT5</label>
+        <input id="f-login" value="${esc(v.login4)}" inputmode="numeric" maxlength="4" placeholder="Ví dụ 4417" autocomplete="off">
+        <div class="hint" id="f-login-hint">Dùng để xác nhận khi ghi kết quả, chống bấm nhầm tài khoản.</div></div>`;
+  h += `<div class="field"><div class="lbl">Màu nhận diện</div><div class="swatches" id="f-colors">${swatches()}</div>
+        <div class="hint" id="f-color-hint"></div></div>`;
+  h += `<div class="two">
+          <div class="field"><label for="f-size">Size (vốn ban đầu)</label>
+            <select id="f-size" ${a ? 'disabled' : ''}>${sizes.map(z => `<option value="${z}" ${+v.size === z ? 'selected' : ''}>${sizeLabel(z)} ($${z.toLocaleString('en-US')})</option>`).join('')}</select></div>
+          <div class="field"><label for="f-cost">Chi phí đã trả ($)</label>
+            <input id="f-cost" type="number" inputmode="decimal" min="0" step="0.01" value="${esc(v.cost)}"></div>
+        </div>`;
+  h += `<div class="two">
+          <div class="field"><label for="f-pdate">Ngày mua</label><input id="f-pdate" type="date" value="${esc(v.purchaseDate)}"></div>
+          <div class="field"><label for="f-order">Thứ tự đánh</label><input id="f-order" type="number" inputmode="numeric" min="1" value="${esc(v.order)}"></div>
+        </div>`;
+  if (!a){
+    h += `<div class="field"><label for="f-phase">Đang ở vòng</label>
+          <select id="f-phase"><option value="P1">Vòng 1 (Phase 1)</option><option value="P2">Vòng 2 (Phase 2)</option><option value="F">Funded</option></select>
+          <div class="hint">Tài khoản mới mua thì để Vòng 1.</div></div>
+          <div class="field" id="f-fdate-wrap" hidden><label for="f-fdate">Ngày lên Funded</label><input id="f-fdate" type="date" value="${localDate(now())}"></div>`;
+  }
+  h += `<div class="err" id="f-err"></div><button class="btn primary" data-action="acc-save">${a ? 'Lưu thay đổi' : 'Thêm tài khoản'}</button>`;
+
+  if (a){
+    const recent = data.results.filter(r => r.accountId === a.id).sort((x, y) => y.createdAt - x.createdAt).slice(0, 15);
+    h += `<h3>15 kết quả gần nhất</h3>`;
+    h += recent.length ? `<div class="list">${recent.map(r => `<div class="li"><span>${fmtDay(r.tradingDay)} · ${PHASES[r.phase]} · ${r.kind === 'adjust' ? 'Đối chiếu' : (r.dir === 'L' ? 'Long' : 'Short')} ·
+           <b class="${r.pnl > 0 ? 'pos' : 'neg'}">${signed(r.pnl)}</b></span>
+           <button class="btn sm danger" data-action="res-del" data-id="${r.id}" data-confirm>Xoá</button></div>`).join('')}</div>`
+      : `<div class="hint">Chưa có kết quả nào.</div>`;
+    h += `<p class="hint">Chuyển vòng, đánh dấu cháy, payout, đối chiếu số dư và xoá tài khoản sẽ có ở lần kiểm tra sau.</p>`;
+  }
+  openSheet(h);
+  updateFormHints();
+}
+function swatches(){
+  const f = ui.form;
+  return COLORS.map(c => `<button class="sw ${f.color === c ? 'on' : ''} ${f.usedBy[c] ? 'used' : ''}" style="background:${c}" data-action="acc-color" data-v="${c}" aria-label="Màu ${c}"></button>`).join('');
+}
+function updateFormHints(){
+  const f = ui.form; if (!f) return;
+  const ch = document.getElementById('f-color-hint');
+  ch.textContent = f.usedBy[f.color] ? `Màu này đang dùng cho "${f.usedBy[f.color]}". Nên chọn màu khác để dễ phân biệt.` : 'Màu có chấm nhỏ ở góc là đã có tài khoản dùng.';
+  ch.className = 'hint' + (f.usedBy[f.color] ? ' warn' : '');
+  const login = document.getElementById('f-login').value.trim();
+  const dup = login && data.accounts.find(x => x.id !== f.id && x.status !== 'breached' && x.login4 === login);
+  const lh = document.getElementById('f-login-hint');
+  lh.textContent = dup ? `4 số này trùng với "${dup.label}". Bước xác nhận sẽ không phân biệt được 2 tài khoản.` : 'Dùng để xác nhận khi ghi kết quả, chống bấm nhầm tài khoản.';
+  lh.className = 'hint' + (dup ? ' warn' : '');
+}
+function saveAccount(){
+  const f = ui.form, g = id => document.getElementById(id);
+  const label = g('f-label').value.trim();
+  const login4 = g('f-login').value.trim();
+  const cost = g('f-cost').value === '' ? 0 : r2(g('f-cost').value);
+  const purchaseDate = g('f-pdate').value;
+  const order = Math.max(1, parseInt(g('f-order').value, 10) || 1);
+  const err = !label ? 'Cần nhập tên tài khoản.'
+            : (login4 && !/^\d{4}$/.test(login4)) ? '4 số cuối login phải đúng 4 chữ số (hoặc để trống).'
+            : !purchaseDate ? 'Cần nhập ngày mua (để app áp đúng luật 3 hay 4 ngày lãi).' : '';
+  if (err){ g('f-err').textContent = err; return; }
+
+  if (f.id){
+    Object.assign(accById(f.id), { label, login4, color:f.color, cost, purchaseDate, order });
+    toast(`Đã lưu ${label}`);
+  } else {
+    const phase = g('f-phase').value;
+    data.accounts.push({ id:uid(), label, login4, color:f.color, size:+g('f-size').value, cost, purchaseDate, order,
+                         phase, status:'active', fundedDate: phase === 'F' ? g('f-fdate').value : '', goatGuardHits:0 });
+    toast(`Đã thêm ${label}`);
+  }
+  closeSheet(); save();
+}
+
+// ---------- Sự kiện ----------
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-action]'); if (!el) return;
+  // Thao tác nguy hiểm: bấm 2 lần mới thực hiện
+  if (el.hasAttribute('data-confirm') && !el.classList.contains('armed')){
+    el.classList.add('armed'); el.dataset.orig = el.textContent; el.textContent = 'Bấm lần nữa để xác nhận';
+    setTimeout(() => { if (el.isConnected){ el.classList.remove('armed'); el.textContent = el.dataset.orig; } }, 4000);
+    return;
+  }
+  const act = el.dataset.action, v = el.dataset.v, id = el.dataset.id;
+  switch (act){
+    case 'close': closeSheet(); break;
+    case 'filter': ui.filter = v; render(); break;
+    case 'add-account': openAccountForm(null); break;
+    case 'manage': openAccountForm(id); break;
+    case 'record': openRecord(id); break;
+    case 'rec-dir': ui.rec.dir = v; ui.rec.dirTouched = true; keepAmount(); renderRecord(); break;
+    case 'rec-out':
+      keepAmount();
+      if (v === 'L'){ ui.rec.amount = String(S().SL); ui.rec.autoAmount = true; }
+      else if (ui.rec.autoAmount){ ui.rec.amount = ''; ui.rec.autoAmount = false; }
+      ui.rec.out = v; renderRecord();
+      if (v === 'W') document.getElementById('r-amt').focus();
+      break;
+    case 'rec-save': saveRecord(); break;
+    case 'acc-color': ui.form.color = v; document.getElementById('f-colors').innerHTML = swatches(); updateFormHints(); break;
+    case 'acc-save': saveAccount(); break;
+    case 'res-del': {
+      const accId = (data.results.find(r => r.id === id) || {}).accountId;
+      data.results = data.results.filter(r => r.id !== id); save();
+      if (accId) openAccountForm(accId);
+      toast('Đã xoá kết quả');
+      break;
+    }
+  }
+});
+function keepAmount(){ const el = document.getElementById('r-amt'); if (el && el.value !== ui.rec.amount){ ui.rec.amount = el.value; ui.rec.autoAmount = false; } }
+
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (ui.rec && t.id === 'r-amt'){ ui.rec.amount = t.value; ui.rec.autoAmount = false; updateRecord(); }
+  if (ui.form){
+    if (t.id === 'f-login'){ t.value = t.value.replace(/\D/g, '').slice(0, 4); updateFormHints(); }
+    if (t.id === 'f-cost') ui.form.costTouched = true;
+    if (t.id === 'f-label') ui.form.labelTouched = true;
+  }
+});
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (ui.rec && t.id === 'r-day' && t.value){
+    keepAmount();
+    ui.rec.day = t.value;
+    if (!ui.rec.dirTouched) ui.rec.dir = defaultDir(t.value);
+    renderRecord();
+  }
+  if (ui.form && t.id === 'f-size'){
+    const z = +t.value;
+    if (!ui.form.costTouched) document.getElementById('f-cost').value = S().ACCOUNT_PRICES[z] ?? '';
+    if (!ui.form.labelTouched) document.getElementById('f-label').value = `GFT ${sizeLabel(z)} #${data.accounts.length + 1}`;
+  }
+  if (ui.form && t.id === 'f-phase') document.getElementById('f-fdate-wrap').hidden = t.value !== 'F';
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !document.getElementById('sheet').hidden) closeSheet(); });
+// Tự cập nhật khi sang ngày giao dịch mới hoặc khi mở lại app trên điện thoại
+setInterval(() => { if (!document.hidden) render(); }, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) render(); });
+
+render();
+</script>
+</body>
+</html>
