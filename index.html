@@ -101,6 +101,15 @@ header h1{font-size:22px;margin:0 0 2px}
 .c-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
 .c-name{font-size:18px;font-weight:700}
 .c-sub{font-size:15px;color:var(--muted)}
+.idbtn{font:inherit;font-size:15px;color:var(--muted);background:none;border:0;padding:6px 0;min-height:32px;cursor:pointer;font-variant-numeric:tabular-nums}
+.idbtn b{color:var(--text)}
+.idbtn .cp{font-size:14px;margin-left:2px}
+textarea{width:100%;min-height:96px;font:inherit;font-size:18px;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--text);resize:vertical;font-variant-numeric:tabular-nums}
+textarea:focus{outline:2px solid var(--accent);outline-offset:1px}
+.pv{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:15px}
+.pv i{flex:none;width:16px;height:16px;border-radius:999px}
+.pv .w{color:var(--red);font-weight:600}
+.pv.skip{opacity:.55}
 .tag{flex:none;font-size:14px;font-weight:700;padding:3px 10px;border-radius:999px;background:var(--chip)}
 .tag-F{background:var(--green-bg);color:var(--green)}
 .tag-dead{background:var(--red-bg);color:var(--red)}
@@ -209,7 +218,8 @@ function normalize(d){
   return {
     version: 1,
     settings,
-    accounts: Array.isArray(d.accounts) ? d.accounts : [],
+    // Bản cũ chỉ lưu 4 số cuối (login4); bản mới lưu nguyên ID (loginId)
+    accounts: (Array.isArray(d.accounts) ? d.accounts : []).map(a => ({ ...a, loginId: a.loginId || a.login4 || '', login4: last4(a.loginId || a.login4) })),
     results:  Array.isArray(d.results)  ? d.results  : [],
     payouts:  Array.isArray(d.payouts)  ? d.payouts  : [],
     updatedAt: d.updatedAt || 0
@@ -232,6 +242,28 @@ function fmtNum(n){ return Math.abs(n).toLocaleString('en-US', { minimumFraction
 function money(x){ const n = r2(x); return (n < 0 ? '−' : '') + '$' + fmtNum(n); }
 function signed(x){ const n = r2(x); return (n > 0 ? '+' : n < 0 ? '−' : '') + '$' + fmtNum(n); }
 function sizeLabel(size){ return (+size >= 1000 ? (+size / 1000) + 'k' : size); }
+// ID tài khoản = số login MT5, chỉ giữ chữ số
+function cleanId(s){ return String(s ?? '').replace(/\D/g, ''); }
+function last4(id){ return cleanId(id).slice(-4); }
+// Tách các ID từ đoạn văn bản dán vào: mỗi cụm chỉ gồm chữ số, dài 4–15 số
+function parseIds(text){
+  const out = [];
+  for (const t of String(text || '').split(/[\s,;|]+/)){
+    const tok = t.replace(/^[^\w]+|[^\w]+$/g, '').replace(/^#/, '');
+    if (/^\d{4,15}$/.test(tok) && !out.includes(tok)) out.push(tok);
+  }
+  return out;
+}
+function idHtml(id){ const c = cleanId(id); return c.length > 4 ? esc(c.slice(0, -4)) + '<b>' + esc(c.slice(-4)) + '</b>' : '<b>' + esc(c) + '</b>'; }
+async function copyText(text){
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch(e){
+    const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch(_){}
+    ta.remove(); return ok;
+  }
+}
 function textOn(hex){
   const h = hex.replace('#',''); const r = parseInt(h.substr(0,2),16), g = parseInt(h.substr(2,2),16), b = parseInt(h.substr(4,2),16);
   return (0.299*r + 0.587*g + 0.114*b) > 165 ? '#111' : '#fff';
@@ -361,7 +393,9 @@ function card(a, c, closed){
   const dead = a.status === 'breached', s = S();
   let h = `<article class="card ${dead ? 'dead' : (!closed && c.tradedToday ? 'done' : '')}" style="--acc:${esc(a.color)}">`;
   h += `<div class="c-top"><div><div class="c-name">${esc(a.label)}</div>
-        <div class="c-sub">${sizeLabel(a.size)} · ${a.login4 ? 'login …' + esc(a.login4) : 'chưa nhập login'}</div></div>
+        <div class="c-sub">${sizeLabel(a.size)} · ${a.loginId
+          ? `<button class="idbtn" data-action="copy-id" data-v="${esc(a.loginId)}" title="Bấm để sao chép ID">ID ${idHtml(a.loginId)} <span class="cp">⧉</span></button>`
+          : 'chưa nhập ID'}</div></div>
         <span class="tag ${dead ? 'tag-dead' : 'tag-' + a.phase}">${dead ? 'Đã cháy · ' + PHASES[a.phase] : PHASES[a.phase]}</span></div>`;
   h += `<div class="c-bal"><span class="big">${money(c.balance)}</span>
         <span class="chg ${c.profit > 0 ? 'pos' : c.profit < 0 ? 'neg' : 'muted'}">${signed(c.profit)}</span></div>`;
@@ -427,7 +461,7 @@ function renderRecord(){
   let h = sheetHead('Ghi kết quả');
   h += `<div class="idblock" style="--acc:${esc(a.color)};--on:${textOn(a.color)}">
           <div class="l1">${esc(a.label)}</div>
-          <div class="l2">${a.login4 ? 'login …' + esc(a.login4) : 'chưa nhập login'} · ${PHASES[a.phase]}</div>
+          <div class="l2">${a.loginId ? 'ID …' + esc(a.login4) : 'chưa nhập ID'} · ${PHASES[a.phase]}</div>
         </div>`;
   h += `<div class="field"><label for="r-day">Ngày giao dịch (theo mốc 5PM New York)</label>
         <input type="date" id="r-day" value="${r.day}" max="${tradingDayAt(now())}">
@@ -477,27 +511,36 @@ function openAccountForm(id){
   const usedBy = {};
   data.accounts.filter(x => x.status !== 'breached' && x.id !== id).forEach(x => usedBy[x.color] = x.label);
   const maxOrder = data.accounts.reduce((m, x) => Math.max(m, +x.order || 0), 0);
-  const v = a || { label:`GFT 5k #${data.accounts.length + 1}`, login4:'', size:5000, cost:S().ACCOUNT_PRICES[5000] ?? '',
+  const v = a || { label:'', loginId:'', size:5000, cost:S().ACCOUNT_PRICES[5000] ?? '',
                    purchaseDate:localDate(now()), phase:'P1', fundedDate:'', order:maxOrder + 1 };
   ui.form = { id, color: a ? a.color : (COLORS.find(c => !usedBy[c]) || COLORS[0]), usedBy, costTouched: !!a, labelTouched: !!a };
   const sizes = Object.keys(S().ACCOUNT_PRICES).map(Number).sort((x, y) => x - y);
 
   let h = sheetHead(a ? 'Sửa tài khoản' : 'Thêm tài khoản');
-  h += `<div class="field"><label for="f-label">Tên hiển thị</label><input id="f-label" value="${esc(v.label)}" maxlength="40"></div>`;
-  h += `<div class="field"><label for="f-login">4 số cuối login MT5</label>
-        <input id="f-login" value="${esc(v.login4)}" inputmode="numeric" maxlength="4" placeholder="Ví dụ 4417" autocomplete="off">
-        <div class="hint" id="f-login-hint">Dùng để xác nhận khi ghi kết quả, chống bấm nhầm tài khoản.</div></div>`;
-  h += `<div class="field"><div class="lbl">Màu nhận diện</div><div class="swatches" id="f-colors">${swatches()}</div>
+  if (a){
+    h += `<div class="field"><label for="f-login">ID tài khoản (số login MT5)</label>
+          <input id="f-login" value="${esc(v.loginId)}" inputmode="numeric" placeholder="Dán ID vào đây" autocomplete="off">
+          <div class="hint" id="f-login-hint"></div></div>`;
+  } else {
+    h += `<div class="field"><label for="f-login">ID tài khoản (số login MT5)</label>
+          <textarea id="f-login" inputmode="numeric" placeholder="Dán 1 hoặc nhiều ID, mỗi ID 1 dòng&#10;Ví dụ:&#10;31004417&#10;31005520" autocomplete="off"></textarea>
+          <button class="btn sm" style="margin-top:8px" data-action="paste-ids">📋 Dán từ bộ nhớ</button>
+          <div class="hint" id="f-login-hint">Dán nhiều ID cùng lúc thì app tạo nhiều tài khoản, tự đặt tên và màu. Chỉ dán số login, <b>không dán mật khẩu</b>.</div>
+          <div id="f-preview"></div></div>`;
+  }
+  h += `<div class="field" id="f-label-wrap"><label for="f-label">Tên hiển thị</label>
+        <input id="f-label" value="${esc(v.label)}" maxlength="40" placeholder="${esc(autoLabel(+v.size, 0))}"></div>`;
+  h += `<div class="field" id="f-color-wrap"><div class="lbl">Màu nhận diện</div><div class="swatches" id="f-colors">${swatches()}</div>
         <div class="hint" id="f-color-hint"></div></div>`;
   h += `<div class="two">
           <div class="field"><label for="f-size">Size (vốn ban đầu)</label>
             <select id="f-size" ${a ? 'disabled' : ''}>${sizes.map(z => `<option value="${z}" ${+v.size === z ? 'selected' : ''}>${sizeLabel(z)} ($${z.toLocaleString('en-US')})</option>`).join('')}</select></div>
-          <div class="field"><label for="f-cost">Chi phí đã trả ($)</label>
+          <div class="field"><label for="f-cost">Chi phí mỗi tài khoản ($)</label>
             <input id="f-cost" type="number" inputmode="decimal" min="0" step="0.01" value="${esc(v.cost)}"></div>
         </div>`;
   h += `<div class="two">
           <div class="field"><label for="f-pdate">Ngày mua</label><input id="f-pdate" type="date" value="${esc(v.purchaseDate)}"></div>
-          <div class="field"><label for="f-order">Thứ tự đánh</label><input id="f-order" type="number" inputmode="numeric" min="1" value="${esc(v.order)}"></div>
+          <div class="field" id="f-order-wrap"><label for="f-order">Thứ tự đánh</label><input id="f-order" type="number" inputmode="numeric" min="1" value="${esc(v.order)}"></div>
         </div>`;
   if (!a){
     h += `<div class="field"><label for="f-phase">Đang ở vòng</label>
@@ -505,7 +548,7 @@ function openAccountForm(id){
           <div class="hint">Tài khoản mới mua thì để Vòng 1.</div></div>
           <div class="field" id="f-fdate-wrap" hidden><label for="f-fdate">Ngày lên Funded</label><input id="f-fdate" type="date" value="${localDate(now())}"></div>`;
   }
-  h += `<div class="err" id="f-err"></div><button class="btn primary" data-action="acc-save">${a ? 'Lưu thay đổi' : 'Thêm tài khoản'}</button>`;
+  h += `<div class="err" id="f-err"></div><button class="btn primary" id="f-save" data-action="acc-save">${a ? 'Lưu thay đổi' : 'Thêm tài khoản'}</button>`;
 
   if (a){
     const recent = data.results.filter(r => r.accountId === a.id).sort((x, y) => y.createdAt - x.createdAt).slice(0, 15);
@@ -519,41 +562,97 @@ function openAccountForm(id){
   openSheet(h);
   updateFormHints();
 }
+function autoLabel(size, i){ return `GFT ${sizeLabel(size)} #${data.accounts.length + 1 + i}`; }
 function swatches(){
   const f = ui.form;
   return COLORS.map(c => `<button class="sw ${f.color === c ? 'on' : ''} ${f.usedBy[c] ? 'used' : ''}" style="background:${c}" data-action="acc-color" data-v="${c}" aria-label="Màu ${c}"></button>`).join('');
 }
+// Màu cho nhiều tài khoản: ưu tiên màu chưa ai dùng, hết thì xoay vòng bảng 10 màu
+function pickColors(n){
+  const f = ui.form, free = COLORS.filter(c => !f.usedBy[c]);
+  const start = data.accounts.filter(x => x.status !== 'breached').length;
+  return Array.from({ length:n }, (_, i) => i < free.length ? free[i] : COLORS[(start + i) % COLORS.length]);
+}
+// Danh sách tài khoản sẽ tạo từ ô dán ID (chế độ thêm)
+function plannedAccounts(){
+  const f = ui.form, g = id => document.getElementById(id);
+  const ids = parseIds(g('f-login').value);
+  const size = +g('f-size').value;
+  const fresh = ids.filter(x => !data.accounts.some(a => a.loginId === x));
+  const colors = fresh.length > 1 ? pickColors(fresh.length) : [f.color];
+  let k = 0;
+  return ids.map(x => {
+    const exists = data.accounts.find(a => a.loginId === x);
+    if (exists) return { loginId:x, skip:`đã có (${exists.label}), bỏ qua` };
+    const i = k++;
+    return { loginId:x, color:colors[i], label: fresh.length > 1 ? autoLabel(size, i) : (g('f-label').value.trim() || autoLabel(size, 0)) };
+  });
+}
 function updateFormHints(){
   const f = ui.form; if (!f) return;
-  const ch = document.getElementById('f-color-hint');
+  const g = id => document.getElementById(id);
+  const raw = g('f-login').value;
+
+  if (!f.id){
+    const plan = plannedAccounts(), fresh = plan.filter(p => !p.skip), multi = fresh.length > 1;
+    g('f-label-wrap').hidden = multi;
+    g('f-color-wrap').hidden = multi;
+    g('f-order-wrap').hidden = multi;
+    // Trùng 4 số cuối thì bước xác nhận không phân biệt được
+    const taken = {};
+    data.accounts.filter(a => a.status !== 'breached' && a.login4).forEach(a => taken[a.login4] = a.label);
+    const seen = {};
+    g('f-preview').innerHTML = plan.length ? `<div class="list">${plan.map(p => {
+      if (p.skip) return `<div class="pv skip"><i style="background:var(--line)"></i><span>ID ${idHtml(p.loginId)} — ${esc(p.skip)}</span></div>`;
+      const l4 = last4(p.loginId), clash = taken[l4] || seen[l4]; seen[l4] = p.label;
+      return `<div class="pv"><i style="background:${p.color}"></i><span><b>${esc(p.label)}</b> · ID ${idHtml(p.loginId)}
+              ${clash ? `<span class="w"> · trùng 4 số cuối với ${esc(clash)}</span>` : ''}</span></div>`;
+    }).join('')}</div>` : (raw.trim() ? `<div class="hint warn">Không thấy ID hợp lệ. ID phải là số login, ít nhất 4 chữ số.</div>` : '');
+    g('f-save').textContent = multi ? `Thêm ${fresh.length} tài khoản` : 'Thêm tài khoản';
+  } else {
+    const id = cleanId(raw);
+    const dup = id && data.accounts.find(x => x.id !== f.id && x.status !== 'breached' && x.login4 === last4(id));
+    const lh = g('f-login-hint');
+    lh.textContent = dup ? `4 số cuối trùng với "${dup.label}". Bước xác nhận sẽ không phân biệt được 2 tài khoản.`
+                         : 'Dùng 4 số cuối để xác nhận khi ghi kết quả, chống bấm nhầm tài khoản.';
+    lh.className = 'hint' + (dup ? ' warn' : '');
+  }
+
+  const ch = g('f-color-hint');
   ch.textContent = f.usedBy[f.color] ? `Màu này đang dùng cho "${f.usedBy[f.color]}". Nên chọn màu khác để dễ phân biệt.` : 'Màu có chấm nhỏ ở góc là đã có tài khoản dùng.';
   ch.className = 'hint' + (f.usedBy[f.color] ? ' warn' : '');
-  const login = document.getElementById('f-login').value.trim();
-  const dup = login && data.accounts.find(x => x.id !== f.id && x.status !== 'breached' && x.login4 === login);
-  const lh = document.getElementById('f-login-hint');
-  lh.textContent = dup ? `4 số này trùng với "${dup.label}". Bước xác nhận sẽ không phân biệt được 2 tài khoản.` : 'Dùng để xác nhận khi ghi kết quả, chống bấm nhầm tài khoản.';
-  lh.className = 'hint' + (dup ? ' warn' : '');
 }
 function saveAccount(){
   const f = ui.form, g = id => document.getElementById(id);
-  const label = g('f-label').value.trim();
-  const login4 = g('f-login').value.trim();
   const cost = g('f-cost').value === '' ? 0 : r2(g('f-cost').value);
   const purchaseDate = g('f-pdate').value;
-  const order = Math.max(1, parseInt(g('f-order').value, 10) || 1);
-  const err = !label ? 'Cần nhập tên tài khoản.'
-            : (login4 && !/^\d{4}$/.test(login4)) ? '4 số cuối login phải đúng 4 chữ số (hoặc để trống).'
-            : !purchaseDate ? 'Cần nhập ngày mua (để app áp đúng luật 3 hay 4 ngày lãi).' : '';
-  if (err){ g('f-err').textContent = err; return; }
+  if (!purchaseDate){ g('f-err').textContent = 'Cần nhập ngày mua (để app áp đúng luật 3 hay 4 ngày lãi).'; return; }
 
   if (f.id){
-    Object.assign(accById(f.id), { label, login4, color:f.color, cost, purchaseDate, order });
+    const label = g('f-label').value.trim();
+    const loginId = cleanId(g('f-login').value);
+    const order = Math.max(1, parseInt(g('f-order').value, 10) || 1);
+    const err = !label ? 'Cần nhập tên tài khoản.'
+              : (loginId && loginId.length < 4) ? 'ID phải có ít nhất 4 chữ số (hoặc để trống).'
+              : (loginId && data.accounts.some(x => x.id !== f.id && x.loginId === loginId)) ? 'ID này đã có ở tài khoản khác.' : '';
+    if (err){ g('f-err').textContent = err; return; }
+    Object.assign(accById(f.id), { label, loginId, login4:last4(loginId), color:f.color, cost, purchaseDate, order });
     toast(`Đã lưu ${label}`);
   } else {
-    const phase = g('f-phase').value;
-    data.accounts.push({ id:uid(), label, login4, color:f.color, size:+g('f-size').value, cost, purchaseDate, order,
-                         phase, status:'active', fundedDate: phase === 'F' ? g('f-fdate').value : '', goatGuardHits:0 });
-    toast(`Đã thêm ${label}`);
+    const raw = g('f-login').value.trim();
+    const plan = plannedAccounts().filter(p => !p.skip);
+    if (raw && !plan.length){ g('f-err').textContent = parseIds(raw).length ? 'Các ID này đều đã có trong app.' : 'Không thấy ID hợp lệ (ít nhất 4 chữ số).'; return; }
+    const size = +g('f-size').value, phase = g('f-phase').value;
+    const fundedDate = phase === 'F' ? g('f-fdate').value : '';
+    const list = plan.length ? plan : [{ loginId:'', color:f.color, label: g('f-label').value.trim() || autoLabel(size, 0) }];
+    let order = list.length > 1
+      ? data.accounts.reduce((m, x) => Math.max(m, +x.order || 0), 0) + 1
+      : Math.max(1, parseInt(g('f-order').value, 10) || 1);
+    for (const p of list){
+      data.accounts.push({ id:uid(), label:p.label, loginId:p.loginId, login4:last4(p.loginId), color:p.color, size, cost, purchaseDate,
+                           order:order++, phase, status:'active', fundedDate, goatGuardHits:0 });
+    }
+    toast(list.length > 1 ? `Đã thêm ${list.length} tài khoản` : `Đã thêm ${list[0].label}`);
   }
   closeSheet(); save();
 }
@@ -585,6 +684,15 @@ document.addEventListener('click', e => {
     case 'rec-save': saveRecord(); break;
     case 'acc-color': ui.form.color = v; document.getElementById('f-colors').innerHTML = swatches(); updateFormHints(); break;
     case 'acc-save': saveAccount(); break;
+    case 'copy-id': copyText(v).then(ok => toast(ok ? `Đã sao chép ID ${v}` : 'Không sao chép được, hãy giữ ngón tay lên số để copy')); break;
+    case 'paste-ids':
+      if (!navigator.clipboard || !navigator.clipboard.readText){ toast('Máy không cho đọc bộ nhớ. Hãy giữ ngón tay trong ô rồi chọn Dán.'); break; }
+      navigator.clipboard.readText().then(txt => {
+        const box = document.getElementById('f-login'); if (!box) return;
+        box.value = (box.value.trim() ? box.value.trim() + '\n' : '') + txt;
+        updateFormHints();
+      }).catch(() => toast('Máy không cho đọc bộ nhớ. Hãy giữ ngón tay trong ô rồi chọn Dán.'));
+      break;
     case 'res-del': {
       const accId = (data.results.find(r => r.id === id) || {}).accountId;
       data.results = data.results.filter(r => r.id !== id); save();
@@ -600,9 +708,8 @@ document.addEventListener('input', e => {
   const t = e.target;
   if (ui.rec && t.id === 'r-amt'){ ui.rec.amount = t.value; ui.rec.autoAmount = false; updateRecord(); }
   if (ui.form){
-    if (t.id === 'f-login'){ t.value = t.value.replace(/\D/g, '').slice(0, 4); updateFormHints(); }
+    if (t.id === 'f-login' || t.id === 'f-label') updateFormHints();
     if (t.id === 'f-cost') ui.form.costTouched = true;
-    if (t.id === 'f-label') ui.form.labelTouched = true;
   }
 });
 document.addEventListener('change', e => {
@@ -616,7 +723,8 @@ document.addEventListener('change', e => {
   if (ui.form && t.id === 'f-size'){
     const z = +t.value;
     if (!ui.form.costTouched) document.getElementById('f-cost').value = S().ACCOUNT_PRICES[z] ?? '';
-    if (!ui.form.labelTouched) document.getElementById('f-label').value = `GFT ${sizeLabel(z)} #${data.accounts.length + 1}`;
+    document.getElementById('f-label').placeholder = autoLabel(z, 0);
+    updateFormHints();
   }
   if (ui.form && t.id === 'f-phase') document.getElementById('f-fdate-wrap').hidden = t.value !== 'F';
 });
