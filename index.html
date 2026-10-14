@@ -413,7 +413,7 @@ function card(a, c, closed){
 
   if (!dead){
     if (c.slLeft <= 1) h += `<div class="alert red">⚠ Sát sàn: chỉ còn chịu ${c.slLeft} lệnh SL (sàn ${money(c.floor)})</div>`;
-    if (c.ready) h += `<div class="alert green">✓ Đủ điều kiện lên vòng</div>`;
+    if (c.ready) h += `<div class="alert green">✓ Đủ điều kiện lên vòng — bấm Quản lý để Pass</div>`;
     if (a.phase === 'F' && s.SL > a.size * s.GOAT_GUARD / 100)
       h += `<span class="pill red">Goat Guard: SL ${money(s.SL)} > ngưỡng ${money(a.size * s.GOAT_GUARD / 100)}</span> `;
     if (closed) h += `<span class="pill grey">Cuối tuần — thị trường đóng</span>`;
@@ -502,7 +502,66 @@ function saveRecord(){
   const pnl = r2(r.out === 'W' ? +r.amount : -r.amount);
   data.results.push({ id:uid(), accountId:a.id, phase:a.phase, tradingDay:r.day, dir:r.dir, pnl, kind:'trade', createdAt:Date.now() });
   closeSheet(); save();
-  toast(`Đã lưu ${a.label}: ${signed(pnl)} → số dư ${money(compute(a, r.day).balance)}`);
+  const c = compute(a, r.day);
+  toast(`Đã lưu ${a.label}: ${signed(pnl)} → số dư ${money(c.balance)}`);
+  if (c.balance <= c.floor) askBreach(a, c);
+}
+
+// ---------- Pass / Cháy ----------
+const NEXT = { P1:'P2', P2:'F' };
+const NEXT_NAME = { P1:'Vòng 2', P2:'Funded (tài khoản real)' };
+function statusBlock(a){
+  const c = compute(a, tradingDayAt(now()));
+  let h = `<div class="idblock" style="--acc:${esc(a.color)};--on:${textOn(a.color)}">
+             <div class="l1">${esc(a.label)}</div>
+             <div class="l2">${a.loginId ? 'ID …' + esc(a.login4) : 'chưa nhập ID'} · ${a.status === 'breached' ? 'Đã cháy (' + PHASES[a.phase] + ')' : PHASES[a.phase]} · số dư ${money(c.balance)}</div>
+           </div>`;
+  if (a.status === 'breached'){
+    h += `<p class="hint">Tài khoản đã kết thúc${a.breachedDate ? ' ngày ' + fmtDay(a.breachedDate) : ''}, nằm ở mục <b>Cháy</b>. Nếu lỡ bấm nhầm thì khôi phục lại.</p>
+          <button class="btn" data-action="acc-restore" data-id="${a.id}" data-confirm>↺ Khôi phục (bấm nhầm)</button>`;
+    return h;
+  }
+  if (a.phase !== 'F'){
+    h += `<div class="field"><label for="f-newid">ID mới của ${NEXT_NAME[a.phase]} (nếu GFT cấp login mới)</label>
+          <input id="f-newid" inputmode="numeric" placeholder="Dán ID mới, để trống nếu giữ ID cũ" autocomplete="off">
+          <div class="hint">${c.ready ? '<span class="pos">✓ Đã đủ điều kiện: đạt mục tiêu và đủ ngày lãi.</span>'
+              : `<span class="neg">Chưa đủ điều kiện</span>: còn thiếu ${money(c.remain)}, ngày lãi ${c.winDays}/${c.minDays}. Chỉ bấm Pass khi GFT đã báo pass.`}</div></div>
+          <div class="err" id="f-pass-err"></div>
+          <button class="btn primary" style="background:var(--green)" data-action="acc-pass" data-id="${a.id}" data-confirm>✓ Pass → ${NEXT_NAME[a.phase]}${c.ready ? '' : ' (chưa đủ điều kiện)'}</button>`;
+  }
+  h += `<div style="height:10px"></div>
+        <button class="btn danger" data-action="acc-breach" data-id="${a.id}" data-confirm>🔥 Cháy — kết thúc tài khoản này</button>`;
+  return h;
+}
+function passAccount(id){
+  const a = accById(id); if (!a || !NEXT[a.phase]) return;
+  const nid = cleanId((document.getElementById('f-newid') || {}).value);
+  const err = (nid && nid.length < 4) ? 'ID mới phải có ít nhất 4 chữ số.'
+            : (nid && data.accounts.some(x => x.id !== id && x.loginId === nid)) ? 'ID mới này đã có ở tài khoản khác.' : '';
+  if (err){ document.getElementById('f-pass-err').textContent = err; return; }
+  const from = a.phase;
+  a.history = (a.history || []).concat({ phase:from, loginId:a.loginId, endDate:localDate(now()), result:'pass' });
+  a.phase = NEXT[from];
+  if (nid){ a.loginId = nid; a.login4 = last4(nid); }
+  if (a.phase === 'F') a.fundedDate = localDate(now());
+  save(); closeSheet();
+  toast(`🎉 ${a.label} đã pass ${PHASES[from]} → ${NEXT_NAME[from]}`);
+}
+function setBreached(id, on){
+  const a = accById(id); if (!a) return;
+  a.status = on ? 'breached' : 'active';
+  a.breachedDate = on ? localDate(now()) : '';
+  save(); closeSheet();
+  toast(on ? `${a.label} đã chuyển vào mục Cháy` : `Đã khôi phục ${a.label}`);
+}
+// Sau khi lưu mà số dư chạm/thủng sàn: hỏi đánh dấu cháy luôn
+function askBreach(a, c){
+  openSheet(sheetHead('Tài khoản chạm sàn') +
+    `<div class="idblock" style="--acc:${esc(a.color)};--on:${textOn(a.color)}"><div class="l1">${esc(a.label)}</div>
+       <div class="l2">${a.loginId ? 'ID …' + esc(a.login4) : ''} · số dư ${money(c.balance)} ≤ sàn ${money(c.floor)}</div></div>
+     <p>Số dư đã chạm sàn sụt giảm tối đa (Max drawdown). Đánh dấu cháy luôn?</p>
+     <button class="btn danger" data-action="acc-breach" data-id="${a.id}" data-confirm>🔥 Đánh dấu cháy</button>
+     <div style="height:10px"></div><button class="btn" data-action="close">Để sau</button>`);
 }
 
 // ---------- Thêm / sửa tài khoản ----------
@@ -516,9 +575,10 @@ function openAccountForm(id){
   ui.form = { id, color: a ? a.color : (COLORS.find(c => !usedBy[c]) || COLORS[0]), usedBy, costTouched: !!a, labelTouched: !!a };
   const sizes = Object.keys(S().ACCOUNT_PRICES).map(Number).sort((x, y) => x - y);
 
-  let h = sheetHead(a ? 'Sửa tài khoản' : 'Thêm tài khoản');
+  let h = sheetHead(a ? 'Quản lý tài khoản' : 'Thêm tài khoản');
+  if (a) h += statusBlock(a);
   if (a){
-    h += `<div class="field"><label for="f-login">ID tài khoản (số login MT5)</label>
+    h += `<h3>Thông tin</h3><div class="field"><label for="f-login">ID tài khoản (số login MT5)</label>
           <input id="f-login" value="${esc(v.loginId)}" inputmode="numeric" placeholder="Dán ID vào đây" autocomplete="off">
           <div class="hint" id="f-login-hint"></div></div>`;
   } else {
@@ -557,7 +617,7 @@ function openAccountForm(id){
            <b class="${r.pnl > 0 ? 'pos' : 'neg'}">${signed(r.pnl)}</b></span>
            <button class="btn sm danger" data-action="res-del" data-id="${r.id}" data-confirm>Xoá</button></div>`).join('')}</div>`
       : `<div class="hint">Chưa có kết quả nào.</div>`;
-    h += `<p class="hint">Chuyển vòng, đánh dấu cháy, payout, đối chiếu số dư và xoá tài khoản sẽ có ở lần kiểm tra sau.</p>`;
+    h += `<p class="hint">Payout, đối chiếu số dư và xoá tài khoản sẽ có ở lần kiểm tra sau.</p>`;
   }
   openSheet(h);
   updateFormHints();
@@ -684,6 +744,9 @@ document.addEventListener('click', e => {
     case 'rec-save': saveRecord(); break;
     case 'acc-color': ui.form.color = v; document.getElementById('f-colors').innerHTML = swatches(); updateFormHints(); break;
     case 'acc-save': saveAccount(); break;
+    case 'acc-pass': passAccount(id); break;
+    case 'acc-breach': setBreached(id, true); break;
+    case 'acc-restore': setBreached(id, false); break;
     case 'copy-id': copyText(v).then(ok => toast(ok ? `Đã sao chép ID ${v}` : 'Không sao chép được, hãy giữ ngón tay lên số để copy')); break;
     case 'paste-ids':
       if (!navigator.clipboard || !navigator.clipboard.readText){ toast('Máy không cho đọc bộ nhớ. Hãy giữ ngón tay trong ô rồi chọn Dán.'); break; }
