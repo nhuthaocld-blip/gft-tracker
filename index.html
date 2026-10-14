@@ -101,6 +101,8 @@ header h1{font-size:22px;margin:0 0 2px}
 .card{background:var(--card);border-radius:16px;box-shadow:var(--shadow);border:1px solid var(--line);border-left:8px solid var(--acc);padding:14px 14px 12px;margin-bottom:12px}
 .card.done{opacity:.62}
 .card.dead{opacity:.55}
+.card.passed{border-left-color:var(--green)}
+.tag.tag-pass{background:var(--green);color:#fff}
 .c-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
 .c-name{font-size:18px;font-weight:700}
 .c-sub{font-size:15px;color:var(--muted)}
@@ -401,9 +403,9 @@ function dots(won, need){
 
 function card(a, c, closed){
   const dead = !isLive(a), s = S();
-  const tagTxt = a.status === 'breached' ? 'Đã cháy · ' + PHASES[a.phase] : a.status === 'passed' ? '✓ Hoàn thành · ' + PHASES[a.phase] : PHASES[a.phase];
-  const tagCls = a.status === 'breached' ? 'tag-dead' : a.status === 'passed' ? 'tag-F' : 'tag-' + a.phase;
-  let h = `<article class="card ${dead ? 'dead' : (!closed && c.tradedToday ? 'done' : '')}" style="--acc:${esc(a.color)}">`;
+  const tagTxt = a.status === 'breached' ? 'Đã cháy · ' + PHASES[a.phase] : a.status === 'passed' ? '✓ Đã pass ' + PHASES[a.phase] : PHASES[a.phase];
+  const tagCls = a.status === 'breached' ? 'tag-dead' : a.status === 'passed' ? 'tag-pass' : 'tag-' + a.phase;
+  let h = `<article class="card ${a.status === 'passed' ? 'passed' : dead ? 'dead' : (!closed && c.tradedToday ? 'done' : '')}" style="--acc:${esc(a.color)}">`;
   h += `<div class="c-top"><div><div class="c-name">${esc(a.label)}</div>
         <div class="c-sub">${sizeLabel(a.size)}${a.batchNo ? ' · Lô ' + a.batchNo : ''} · ${a.loginId
           ? `<button class="idbtn" data-action="copy-id" data-v="${esc(a.loginId)}" title="Bấm để sao chép ID">ID ${idHtml(a.loginId)} <span class="cp">⧉</span></button>`
@@ -421,7 +423,7 @@ function card(a, c, closed){
     h += `<div class="row"><span>Funded${c.fundedDays != null ? ` <b>${c.fundedDays}</b> ngày` : ''}</span>
           <span>Ngày lãi kỳ này ${dots(c.winDays, c.minDays)} <b>${c.winDays}/${c.minDays}</b></span></div>`;
   }
-  h += `<div class="row sub"><span>Đệm tới sàn (Buffer) <b>${money(c.buffer)}</b></span><span>Chịu thêm <b>${c.slLeft}</b> lệnh SL</span></div>`;
+  if (a.status !== 'passed') h += `<div class="row sub"><span>Đệm tới sàn (Buffer) <b>${money(c.buffer)}</b></span><span>Chịu thêm <b>${c.slLeft}</b> lệnh SL</span></div>`;
 
   if (!dead){
     if (c.slLeft <= 1) h += `<div class="alert red">⚠ Sát sàn: chỉ còn chịu ${c.slLeft} lệnh SL (sàn ${money(c.floor)})</div>`;
@@ -436,7 +438,7 @@ function card(a, c, closed){
           <button class="btn" data-action="manage" data-id="${a.id}">Quản lý</button></div>`;
   } else {
     const nx = a.status === 'passed' && accById(a.nextId);
-    if (a.status === 'passed') h += `<div class="alert green">Đã pass${a.passedDate ? ' ngày ' + fmtDay(a.passedDate) : ''}${nx ? ` → chuyển sang ${PHASES[nx.phase]} ${nx.loginId ? 'ID …' + esc(nx.login4) : '(chưa nhập ID)'}` : ''}</div>`;
+    if (a.status === 'passed') h += `<div class="alert green">✓ Đã pass ${PHASES[a.phase]}${a.passedDate ? ' ngày ' + fmtDay(a.passedDate) : ''}${nx ? ` → chuyển sang ${PHASES[nx.phase]} ${nx.loginId ? 'ID …' + esc(nx.login4) : '(chưa nhập ID)'}` : ''}</div>`;
     h += `<div class="c-btns" style="grid-template-columns:1fr"><button class="btn" data-action="manage" data-id="${a.id}">Quản lý</button></div>`;
   }
   return h + `</article>`;
@@ -528,7 +530,7 @@ function statusBlock(a){
   const c = compute(a, tradingDayAt(now()));
   let h = `<div class="idblock" style="--acc:${esc(a.color)};--on:${textOn(a.color)}">
              <div class="l1">${esc(a.label)}</div>
-             <div class="l2">${a.loginId ? 'ID …' + esc(a.login4) : 'chưa nhập ID'} · ${a.status === 'breached' ? 'Đã cháy (' + PHASES[a.phase] + ')' : a.status === 'passed' ? 'Hoàn thành (' + PHASES[a.phase] + ')' : PHASES[a.phase]} · số dư ${money(c.balance)}</div>
+             <div class="l2">${a.loginId ? 'ID …' + esc(a.login4) : 'chưa nhập ID'} · ${a.status === 'breached' ? 'Đã cháy (' + PHASES[a.phase] + ')' : a.status === 'passed' ? 'Đã pass ' + PHASES[a.phase] : PHASES[a.phase]} · số dư ${money(c.balance)}</div>
            </div>`;
   if (a.status === 'breached'){
     h += `<p class="hint">Tài khoản đã kết thúc${a.breachedDate ? ' ngày ' + fmtDay(a.breachedDate) : ''}, nằm ở mục <b>Cháy</b>. Nếu lỡ bấm nhầm thì khôi phục lại.</p>
