@@ -595,8 +595,9 @@ function openAccountForm(id){
   h += `<div class="two">
           <div class="field"><label for="f-size">Size (vốn ban đầu)</label>
             <select id="f-size" ${a ? 'disabled' : ''}>${sizes.map(z => `<option value="${z}" ${+v.size === z ? 'selected' : ''}>${sizeLabel(z)} ($${z.toLocaleString('en-US')})</option>`).join('')}</select></div>
-          <div class="field"><label for="f-cost">Chi phí mỗi tài khoản ($)</label>
-            <input id="f-cost" type="number" inputmode="decimal" min="0" step="0.01" value="${esc(v.cost)}"></div>
+          <div class="field"><label for="f-cost" id="f-cost-lbl">Chi phí mỗi tài khoản ($)</label>
+            <input id="f-cost" type="number" inputmode="decimal" min="0" step="0.01" value="${esc(v.cost)}">
+            <div class="hint" id="f-cost-hint"></div></div>
         </div>`;
   h += `<div class="two">
           <div class="field"><label for="f-pdate">Ngày mua</label><input id="f-pdate" type="date" value="${esc(v.purchaseDate)}"></div>
@@ -669,6 +670,12 @@ function updateFormHints(){
               ${clash ? `<span class="w"> · trùng 4 số cuối với ${esc(clash)}</span>` : ''}</span></div>`;
     }).join('')}</div>` : (raw.trim() ? `<div class="hint warn">Không thấy ID hợp lệ. ID phải là số login, ít nhất 4 chữ số.</div>` : '');
     g('f-save').textContent = multi ? `Thêm ${fresh.length} tài khoản` : 'Thêm tài khoản';
+    // Mua nhiều tài khoản 1 lần: nhập TỔNG tiền cả lô, app chia đều cho từng tài khoản
+    const n = fresh.length, price = S().ACCOUNT_PRICES[+g('f-size').value] ?? 0;
+    if (!f.costTouched) g('f-cost').value = multi ? r2(price * n) : price;
+    g('f-cost-lbl').textContent = multi ? `Tổng tiền cả lô ${n} tài khoản ($)` : 'Chi phí mỗi tài khoản ($)';
+    const total = +g('f-cost').value || 0;
+    g('f-cost-hint').textContent = multi ? `Chia đều: mỗi tài khoản ≈ ${money(total / n)}` : '';
   } else {
     const id = cleanId(raw);
     const dup = id && data.accounts.find(x => x.id !== f.id && x.status !== 'breached' && x.login4 === last4(id));
@@ -681,6 +688,11 @@ function updateFormHints(){
   const ch = g('f-color-hint');
   ch.textContent = f.usedBy[f.color] ? `Màu này đang dùng cho "${f.usedBy[f.color]}". Nên chọn màu khác để dễ phân biệt.` : 'Màu có chấm nhỏ ở góc là đã có tài khoản dùng.';
   ch.className = 'hint' + (f.usedBy[f.color] ? ' warn' : '');
+}
+// Chia tổng tiền cho n tài khoản, cộng lại đúng bằng tổng (tính theo cent)
+function splitCost(total, n){
+  const cents = Math.round(total * 100), base = Math.floor(cents / n), rem = cents - base * n;
+  return Array.from({ length:n }, (_, i) => (base + (i < rem ? 1 : 0)) / 100);
 }
 function saveAccount(){
   const f = ui.form, g = id => document.getElementById(id);
@@ -705,11 +717,12 @@ function saveAccount(){
     const size = +g('f-size').value, phase = g('f-phase').value;
     const fundedDate = phase === 'F' ? g('f-fdate').value : '';
     const list = plan.length ? plan : [{ loginId:'', color:f.color, label: g('f-label').value.trim() || autoLabel(size, 0) }];
+    const shares = splitCost(cost, list.length);
     let order = list.length > 1
       ? data.accounts.reduce((m, x) => Math.max(m, +x.order || 0), 0) + 1
       : Math.max(1, parseInt(g('f-order').value, 10) || 1);
     for (const p of list){
-      data.accounts.push({ id:uid(), label:p.label, loginId:p.loginId, login4:last4(p.loginId), color:p.color, size, cost, purchaseDate,
+      data.accounts.push({ id:uid(), label:p.label, loginId:p.loginId, login4:last4(p.loginId), color:p.color, size, cost:shares.shift(), purchaseDate,
                            order:order++, phase, status:'active', fundedDate, goatGuardHits:0 });
     }
     toast(list.length > 1 ? `Đã thêm ${list.length} tài khoản` : `Đã thêm ${list[0].label}`);
@@ -772,7 +785,7 @@ document.addEventListener('input', e => {
   if (ui.rec && t.id === 'r-amt'){ ui.rec.amount = t.value; ui.rec.autoAmount = false; updateRecord(); }
   if (ui.form){
     if (t.id === 'f-login' || t.id === 'f-label') updateFormHints();
-    if (t.id === 'f-cost') ui.form.costTouched = true;
+    if (t.id === 'f-cost'){ ui.form.costTouched = true; updateFormHints(); }
   }
 });
 document.addEventListener('change', e => {
