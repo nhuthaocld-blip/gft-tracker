@@ -26,7 +26,10 @@ const CONFIG = {
   PAYOUT_WARN_DAYS: 2,  // Payout chờ quá số ngày này thì cảnh báo vàng
   DAY_RESET_TZ: "America/New_York", // Múi giờ tính ngày giao dịch
   DAY_RESET_HOUR: 17,   // Giờ sang ngày mới theo New York (17 = 5PM)
-  ACCOUNT_PRICES: { 5000: 17, 8000: 56, 15000: 98, 25000: 158, 50000: 308, 100000: 478, 150000: 758 } // Giá gốc ($) để tự điền chi phí
+  ACCOUNT_PRICES: { 5000: 17, 8000: 56, 15000: 98, 25000: 158, 50000: 308, 100000: 478, 150000: 758 }, // Giá gốc ($) để tự điền chi phí
+  // Giá mua theo lô (combo). Ví dụ 5k: mua 3 tài khoản cùng lúc = $59.
+  // Thêm size khác theo dạng  size: { qty: số tài khoản, price: giá cả combo }
+  COMBO_PRICES: { 5000: { qty: 3, price: 59 } }
 };
 </script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -214,7 +217,8 @@ function load(){
 function normalize(d){
   d = (d && typeof d === 'object') ? d : {};
   const saved = d.settings || {};
-  const settings = { ...CONFIG, ...saved, ACCOUNT_PRICES:{ ...CONFIG.ACCOUNT_PRICES, ...(saved.ACCOUNT_PRICES || {}) } };
+  const settings = { ...CONFIG, ...saved, ACCOUNT_PRICES:{ ...CONFIG.ACCOUNT_PRICES, ...(saved.ACCOUNT_PRICES || {}) },
+                     COMBO_PRICES:{ ...CONFIG.COMBO_PRICES, ...(saved.COMBO_PRICES || {}) } };
   return {
     version: 1,
     settings,
@@ -382,7 +386,9 @@ function render(){
   else if (!list.length) h += `<div class="empty">Không có tài khoản nào trong mục này.</div>`;
   else h += list.map(a => card(a, comp.get(a.id), closed)).join('');
 
-  h += `<div class="foot"><button class="btn primary" data-action="add-account">+ Thêm tài khoản</button></div>`;
+  const cb = S().COMBO_PRICES[5000];
+  h += `<div class="foot"><button class="btn primary" data-action="add-account">+ Thêm tài khoản</button>
+        ${cb ? `<button class="btn" data-action="add-combo">+ Thêm lô combo ${cb.qty} tài khoản 5k (${money(cb.price)})</button>` : ''}</div>`;
   if (data.updatedAt) h += `<div class="saved-at">Dữ liệu lưu trên máy này · sửa lần cuối ${fmtStamp(data.updatedAt)}</div>`;
   document.getElementById('app').innerHTML = h;
 }
@@ -399,7 +405,7 @@ function card(a, c, closed){
   const tagCls = a.status === 'breached' ? 'tag-dead' : a.status === 'passed' ? 'tag-F' : 'tag-' + a.phase;
   let h = `<article class="card ${dead ? 'dead' : (!closed && c.tradedToday ? 'done' : '')}" style="--acc:${esc(a.color)}">`;
   h += `<div class="c-top"><div><div class="c-name">${esc(a.label)}</div>
-        <div class="c-sub">${sizeLabel(a.size)} · ${a.loginId
+        <div class="c-sub">${sizeLabel(a.size)}${a.batchNo ? ' · Lô ' + a.batchNo : ''} · ${a.loginId
           ? `<button class="idbtn" data-action="copy-id" data-v="${esc(a.loginId)}" title="Bấm để sao chép ID">ID ${idHtml(a.loginId)} <span class="cp">⧉</span></button>`
           : 'chưa nhập ID'}</div></div>
         <span class="tag ${tagCls}">${tagTxt}</span></div>`;
@@ -561,7 +567,7 @@ function passAccount(id){
   const nx = { id:uid(), label:a.label, loginId:nid, login4:last4(nid), color:a.color, size:a.size,
                cost:0,                       // tiền mua đã tính ở tài khoản Vòng 1, không cộng lại
                purchaseDate:a.purchaseDate, order:a.order, phase:to, status:'active',
-               fundedDate: to === 'F' ? today : '', goatGuardHits:0, prevId:a.id };
+               fundedDate: to === 'F' ? today : '', goatGuardHits:0, prevId:a.id, batchNo:a.batchNo || 0 };
   data.accounts.push(nx);
   Object.assign(a, { status:'passed', passedDate:today, nextId:nx.id });
   save(); closeSheet();
@@ -699,11 +705,12 @@ function updateFormHints(){
     }).join('')}</div>` : (raw.trim() ? `<div class="hint warn">Không thấy ID hợp lệ. ID phải là số login, ít nhất 4 chữ số.</div>` : '');
     g('f-save').textContent = multi ? `Thêm ${fresh.length} tài khoản` : 'Thêm tài khoản';
     // Mua nhiều tài khoản 1 lần: nhập TỔNG tiền cả lô, app chia đều cho từng tài khoản
-    const n = fresh.length, price = S().ACCOUNT_PRICES[+g('f-size').value] ?? 0;
-    if (!f.costTouched) g('f-cost').value = multi ? r2(price * n) : price;
+    const n = fresh.length, lp = lotPrice(+g('f-size').value, n);
+    if (!f.costTouched) g('f-cost').value = multi ? lp.total : (S().ACCOUNT_PRICES[+g('f-size').value] ?? 0);
     g('f-cost-lbl').textContent = multi ? `Tổng tiền cả lô ${n} tài khoản ($)` : 'Chi phí mỗi tài khoản ($)';
     const total = +g('f-cost').value || 0;
-    g('f-cost-hint').textContent = multi ? `Chia đều: mỗi tài khoản ≈ ${money(total / n)}` : '';
+    const comboTxt = multi && lp.combos ? `Giá combo: ${lp.combos} × combo ${lp.combo.qty} TK ${money(lp.combo.price)}${lp.singles ? ` + ${lp.singles} lẻ × ${money(lp.single)}` : ''}. ` : '';
+    g('f-cost-hint').textContent = multi ? `${comboTxt}Chia đều: mỗi tài khoản ≈ ${money(total / n)}` : '';
   } else {
     const id = cleanId(raw);
     const dup = id && data.accounts.find(x => x.id !== f.id && isLive(x) && x.login4 === last4(id));
@@ -716,6 +723,12 @@ function updateFormHints(){
   const ch = g('f-color-hint');
   ch.textContent = f.usedBy[f.color] ? `Màu này đang dùng cho "${f.usedBy[f.color]}". Nên chọn màu khác để dễ phân biệt.` : 'Màu có chấm nhỏ ở góc là đã có tài khoản dùng.';
   ch.className = 'hint' + (f.usedBy[f.color] ? ' warn' : '');
+}
+function lotPrice(size, n){
+  const single = +(S().ACCOUNT_PRICES[size] ?? 0), combo = S().COMBO_PRICES[size];
+  if (!combo || !(combo.qty > 1) || n < combo.qty) return { total:r2(single * n), combos:0, singles:n, combo };
+  const combos = Math.floor(n / combo.qty), singles = n - combos * combo.qty;
+  return { total:r2(combos * combo.price + singles * single), combos, singles, combo, single };
 }
 // Chia tổng tiền cho n tài khoản, cộng lại đúng bằng tổng (tính theo cent)
 function splitCost(total, n){
@@ -746,12 +759,13 @@ function saveAccount(){
     const fundedDate = phase === 'F' ? g('f-fdate').value : '';
     const list = plan.length ? plan : [{ loginId:'', color:f.color, label: g('f-label').value.trim() || autoLabel(size, 0) }];
     const shares = splitCost(cost, list.length);
+    const batchNo = list.length > 1 ? data.accounts.reduce((m, x) => Math.max(m, +x.batchNo || 0), 0) + 1 : 0;
     let order = list.length > 1
       ? data.accounts.reduce((m, x) => Math.max(m, +x.order || 0), 0) + 1
       : Math.max(1, parseInt(g('f-order').value, 10) || 1);
     for (const p of list){
       data.accounts.push({ id:uid(), label:p.label, loginId:p.loginId, login4:last4(p.loginId), color:p.color, size, cost:shares.shift(), purchaseDate,
-                           order:order++, phase, status:'active', fundedDate, goatGuardHits:0 });
+                           order:order++, phase, status:'active', fundedDate, goatGuardHits:0, batchNo });
     }
     toast(list.length > 1 ? `Đã thêm ${list.length} tài khoản` : `Đã thêm ${list[0].label}`);
   }
@@ -772,6 +786,13 @@ document.addEventListener('click', e => {
     case 'close': closeSheet(); break;
     case 'filter': ui.filter = v; render(); break;
     case 'add-account': openAccountForm(null); break;
+    case 'add-combo': {
+      openAccountForm(null);
+      const q = S().COMBO_PRICES[5000].qty;
+      document.getElementById('f-login').placeholder = `Dán ${q} ID của lô combo, mỗi ID 1 dòng`;
+      document.getElementById('f-login-hint').innerHTML = `Dán đủ <b>${q} ID</b> trong mail GFT. App tự tính giá combo và chia đều cho từng tài khoản. Chỉ dán số login, <b>không dán mật khẩu</b>.`;
+      break;
+    }
     case 'manage': openAccountForm(id); break;
     case 'record': openRecord(id); break;
     case 'rec-dir': ui.rec.dir = v; ui.rec.dirTouched = true; keepAmount(); renderRecord(); break;
