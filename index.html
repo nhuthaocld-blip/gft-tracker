@@ -82,7 +82,7 @@ header h1{font-size:22px;margin:0 0 2px}
 .banner.red{background:var(--red-bg);color:var(--red)}
 
 .overview{background:var(--card);border-radius:16px;padding:14px;box-shadow:var(--shadow);border:1px solid var(--line)}
-.ov-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;text-align:center}
+.ov-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;text-align:center}
 .ov-grid div{padding:4px 0}
 .ov-grid b{display:block;font-size:22px;line-height:1.2}
 .ov-grid span{font-size:15px;color:var(--muted)}
@@ -235,6 +235,8 @@ function save(){
 // ---------- Tiện ích ----------
 const S = () => data.settings;
 const accById = id => data.accounts.find(a => a.id === id);
+// Tài khoản còn đang đánh (chưa cháy, chưa hoàn thành)
+const isLive = a => (a.status || 'active') === 'active';
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const r2 = x => Math.round((+x || 0) * 100) / 100;
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -336,7 +338,8 @@ function render(){
   const ms = now(), today = tradingDayAt(ms), closed = marketClosedAt(ms);
   const accs = data.accounts;
   const comp = new Map(accs.map(a => [a.id, compute(a, today)]));
-  const active = accs.filter(a => a.status !== 'breached');
+  const active = accs.filter(isLive);
+  const nPassed = accs.filter(a => a.status === 'passed').length, nDead = accs.filter(a => a.status === 'breached').length;
   const cnt = { P1:0, P2:0, F:0 }; active.forEach(a => cnt[a.phase]++);
   const notTraded = closed ? 0 : active.filter(a => !comp.get(a.id).tradedToday).length;
   const cost = accs.reduce((t, a) => t + (+a.cost || 0), 0);
@@ -351,22 +354,23 @@ function render(){
 
   h += `<section class="overview">
     <div class="ov-grid">
-      <div><b>${accs.length}</b><span>Tổng</span></div>
+      <div><b>${active.length}</b><span>Đang chạy</span></div>
       <div><b>${cnt.P1}</b><span>Vòng 1</span></div>
       <div><b>${cnt.P2}</b><span>Vòng 2</span></div>
       <div><b>${cnt.F}</b><span>Funded</span></div>
-      <div><b>${accs.length - active.length}</b><span>Cháy</span></div>
+      <div><b>${nPassed}</b><span>Hoàn thành</span></div>
+      <div><b>${nDead}</b><span>Cháy</span></div>
     </div>
     <div class="ov-line"><span class="ov-todo ${notTraded ? 'has' : ''}">${closed ? 'Cuối tuần — nghỉ' : `Chưa đánh hôm nay: ${notTraded}`}</span></div>
     <div class="ov-line"><span>Vốn đã bỏ ra <b>${money(cost)}</b></span><span>Payout đã về <b>${money(paid)}</b></span></div>
   </section>`;
 
-  const chips = [['active','Đang chạy'],['P1','Vòng 1'],['P2','Vòng 2'],['F','Funded'],['breached','Cháy']];
+  const chips = [['active','Đang chạy'],['P1','Vòng 1'],['P2','Vòng 2'],['F','Funded'],['passed','Hoàn thành'],['breached','Cháy']];
   h += `<nav class="chips">${chips.map(([k, t]) => `<button class="chip ${ui.filter === k ? 'on' : ''}" data-action="filter" data-v="${k}">${t}</button>`).join('')}</nav>`;
 
   const list = accs.filter(a => {
-    if (ui.filter === 'breached') return a.status === 'breached';
-    if (a.status === 'breached') return false;
+    if (ui.filter === 'breached' || ui.filter === 'passed') return a.status === ui.filter;
+    if (!isLive(a)) return false;
     return ui.filter === 'active' || a.phase === ui.filter;
   }).sort((a, b) => {
     // Chưa đánh hôm nay lên trước; trong mỗi nhóm giữ thứ tự đánh cố định của bạn
@@ -390,13 +394,15 @@ function dots(won, need){
 }
 
 function card(a, c, closed){
-  const dead = a.status === 'breached', s = S();
+  const dead = !isLive(a), s = S();
+  const tagTxt = a.status === 'breached' ? 'Đã cháy · ' + PHASES[a.phase] : a.status === 'passed' ? '✓ Hoàn thành · ' + PHASES[a.phase] : PHASES[a.phase];
+  const tagCls = a.status === 'breached' ? 'tag-dead' : a.status === 'passed' ? 'tag-F' : 'tag-' + a.phase;
   let h = `<article class="card ${dead ? 'dead' : (!closed && c.tradedToday ? 'done' : '')}" style="--acc:${esc(a.color)}">`;
   h += `<div class="c-top"><div><div class="c-name">${esc(a.label)}</div>
         <div class="c-sub">${sizeLabel(a.size)} · ${a.loginId
           ? `<button class="idbtn" data-action="copy-id" data-v="${esc(a.loginId)}" title="Bấm để sao chép ID">ID ${idHtml(a.loginId)} <span class="cp">⧉</span></button>`
           : 'chưa nhập ID'}</div></div>
-        <span class="tag ${dead ? 'tag-dead' : 'tag-' + a.phase}">${dead ? 'Đã cháy · ' + PHASES[a.phase] : PHASES[a.phase]}</span></div>`;
+        <span class="tag ${tagCls}">${tagTxt}</span></div>`;
   h += `<div class="c-bal"><span class="big">${money(c.balance)}</span>
         <span class="chg ${c.profit > 0 ? 'pos' : c.profit < 0 ? 'neg' : 'muted'}">${signed(c.profit)}</span></div>`;
 
@@ -423,6 +429,8 @@ function card(a, c, closed){
     h += `<div class="c-btns"><button class="btn primary" data-action="record" data-id="${a.id}">Ghi kết quả</button>
           <button class="btn" data-action="manage" data-id="${a.id}">Quản lý</button></div>`;
   } else {
+    const nx = a.status === 'passed' && accById(a.nextId);
+    if (a.status === 'passed') h += `<div class="alert green">Đã pass${a.passedDate ? ' ngày ' + fmtDay(a.passedDate) : ''}${nx ? ` → chuyển sang ${PHASES[nx.phase]} ${nx.loginId ? 'ID …' + esc(nx.login4) : '(chưa nhập ID)'}` : ''}</div>`;
     h += `<div class="c-btns" style="grid-template-columns:1fr"><button class="btn" data-action="manage" data-id="${a.id}">Quản lý</button></div>`;
   }
   return h + `</article>`;
@@ -514,20 +522,29 @@ function statusBlock(a){
   const c = compute(a, tradingDayAt(now()));
   let h = `<div class="idblock" style="--acc:${esc(a.color)};--on:${textOn(a.color)}">
              <div class="l1">${esc(a.label)}</div>
-             <div class="l2">${a.loginId ? 'ID …' + esc(a.login4) : 'chưa nhập ID'} · ${a.status === 'breached' ? 'Đã cháy (' + PHASES[a.phase] + ')' : PHASES[a.phase]} · số dư ${money(c.balance)}</div>
+             <div class="l2">${a.loginId ? 'ID …' + esc(a.login4) : 'chưa nhập ID'} · ${a.status === 'breached' ? 'Đã cháy (' + PHASES[a.phase] + ')' : a.status === 'passed' ? 'Hoàn thành (' + PHASES[a.phase] + ')' : PHASES[a.phase]} · số dư ${money(c.balance)}</div>
            </div>`;
   if (a.status === 'breached'){
     h += `<p class="hint">Tài khoản đã kết thúc${a.breachedDate ? ' ngày ' + fmtDay(a.breachedDate) : ''}, nằm ở mục <b>Cháy</b>. Nếu lỡ bấm nhầm thì khôi phục lại.</p>
           <button class="btn" data-action="acc-restore" data-id="${a.id}" data-confirm>↺ Khôi phục (bấm nhầm)</button>`;
     return h;
   }
+  if (a.status === 'passed'){
+    const nx = accById(a.nextId);
+    h += `<p class="hint">Tài khoản này đã pass${a.passedDate ? ' ngày ' + fmtDay(a.passedDate) : ''} và đã đóng, nằm ở mục <b>Hoàn thành</b>.
+          ${nx ? `Đang đánh tiếp ở tài khoản ${PHASES[nx.phase]} ${nx.loginId ? 'ID …' + esc(nx.login4) : '(chưa nhập ID)'}.` : ''}</p>`;
+    if (nx && !data.results.some(r => r.accountId === nx.id))
+      h += `<button class="btn" data-action="acc-unpass" data-id="${a.id}" data-confirm>↺ Hoàn tác pass (bấm nhầm)</button>`;
+    return h;
+  }
   if (a.phase !== 'F'){
-    h += `<div class="field"><label for="f-newid">ID mới của ${NEXT_NAME[a.phase]} (nếu GFT cấp login mới)</label>
-          <input id="f-newid" inputmode="numeric" placeholder="Dán ID mới, để trống nếu giữ ID cũ" autocomplete="off">
+    h += `<div class="field"><label for="f-newid">ID tài khoản ${NEXT_NAME[a.phase]} mới (GFT gửi qua mail)</label>
+          <input id="f-newid" inputmode="numeric" placeholder="Dán ID mới vào đây" autocomplete="off">
+          <div class="hint">Tài khoản ${PHASES[a.phase]} này sẽ chuyển sang <b>Hoàn thành</b>; app tạo tài khoản ${NEXT_NAME[a.phase]} mới, bắt đầu từ ${money(a.size)}. Chưa nhận mail thì để trống, dán ID sau ở Quản lý.</div>
           <div class="hint">${c.ready ? '<span class="pos">✓ Đã đủ điều kiện: đạt mục tiêu và đủ ngày lãi.</span>'
               : `<span class="neg">Chưa đủ điều kiện</span>: còn thiếu ${money(c.remain)}, ngày lãi ${c.winDays}/${c.minDays}. Chỉ bấm Pass khi GFT đã báo pass.`}</div></div>
           <div class="err" id="f-pass-err"></div>
-          <button class="btn primary" style="background:var(--green)" data-action="acc-pass" data-id="${a.id}" data-confirm>✓ Pass → ${NEXT_NAME[a.phase]}${c.ready ? '' : ' (chưa đủ điều kiện)'}</button>`;
+          <button class="btn primary" style="background:var(--green)" data-action="acc-pass" data-id="${a.id}" data-confirm>✓ Pass → tạo tài khoản ${NEXT_NAME[a.phase]} mới${c.ready ? '' : ' (chưa đủ điều kiện)'}</button>`;
   }
   h += `<div style="height:10px"></div>
         <button class="btn danger" data-action="acc-breach" data-id="${a.id}" data-confirm>🔥 Cháy — kết thúc tài khoản này</button>`;
@@ -539,13 +556,24 @@ function passAccount(id){
   const err = (nid && nid.length < 4) ? 'ID mới phải có ít nhất 4 chữ số.'
             : (nid && data.accounts.some(x => x.id !== id && x.loginId === nid)) ? 'ID mới này đã có ở tài khoản khác.' : '';
   if (err){ document.getElementById('f-pass-err').textContent = err; return; }
-  const from = a.phase;
-  a.history = (a.history || []).concat({ phase:from, loginId:a.loginId, endDate:localDate(now()), result:'pass' });
-  a.phase = NEXT[from];
-  if (nid){ a.loginId = nid; a.login4 = last4(nid); }
-  if (a.phase === 'F') a.fundedDate = localDate(now());
+  // GFT đóng tài khoản cũ và gửi tài khoản mới: cũ -> Hoàn thành, tạo tài khoản mới hoàn toàn
+  const today = localDate(now()), to = NEXT[a.phase];
+  const nx = { id:uid(), label:a.label, loginId:nid, login4:last4(nid), color:a.color, size:a.size,
+               cost:0,                       // tiền mua đã tính ở tài khoản Vòng 1, không cộng lại
+               purchaseDate:a.purchaseDate, order:a.order, phase:to, status:'active',
+               fundedDate: to === 'F' ? today : '', goatGuardHits:0, prevId:a.id };
+  data.accounts.push(nx);
+  Object.assign(a, { status:'passed', passedDate:today, nextId:nx.id });
   save(); closeSheet();
-  toast(`🎉 ${a.label} đã pass ${PHASES[from]} → ${NEXT_NAME[from]}`);
+  toast(`🎉 ${a.label} pass ${PHASES[a.phase]} → đã tạo tài khoản ${NEXT_NAME[a.phase]} mới`);
+}
+function unpassAccount(id){
+  const a = accById(id), nx = a && accById(a.nextId); if (!nx) return;
+  if (data.results.some(r => r.accountId === nx.id)){ toast('Tài khoản mới đã có kết quả, không hoàn tác được.'); return; }
+  data.accounts = data.accounts.filter(x => x.id !== nx.id);
+  Object.assign(a, { status:'active', passedDate:'', nextId:'' });
+  save(); closeSheet();
+  toast(`Đã hoàn tác pass ${a.label}`);
 }
 function setBreached(id, on){
   const a = accById(id); if (!a) return;
@@ -568,7 +596,7 @@ function askBreach(a, c){
 function openAccountForm(id){
   const a = id ? accById(id) : null;
   const usedBy = {};
-  data.accounts.filter(x => x.status !== 'breached' && x.id !== id).forEach(x => usedBy[x.color] = x.label);
+  data.accounts.filter(x => isLive(x) && x.id !== id).forEach(x => usedBy[x.color] = x.label);
   const maxOrder = data.accounts.reduce((m, x) => Math.max(m, +x.order || 0), 0);
   const v = a || { label:'', loginId:'', size:5000, cost:S().ACCOUNT_PRICES[5000] ?? '',
                    purchaseDate:localDate(now()), phase:'P1', fundedDate:'', order:maxOrder + 1 };
@@ -631,7 +659,7 @@ function swatches(){
 // Màu cho nhiều tài khoản: ưu tiên màu chưa ai dùng, hết thì xoay vòng bảng 10 màu
 function pickColors(n){
   const f = ui.form, free = COLORS.filter(c => !f.usedBy[c]);
-  const start = data.accounts.filter(x => x.status !== 'breached').length;
+  const start = data.accounts.filter(isLive).length;
   return Array.from({ length:n }, (_, i) => i < free.length ? free[i] : COLORS[(start + i) % COLORS.length]);
 }
 // Danh sách tài khoản sẽ tạo từ ô dán ID (chế độ thêm)
@@ -661,7 +689,7 @@ function updateFormHints(){
     g('f-order-wrap').hidden = multi;
     // Trùng 4 số cuối thì bước xác nhận không phân biệt được
     const taken = {};
-    data.accounts.filter(a => a.status !== 'breached' && a.login4).forEach(a => taken[a.login4] = a.label);
+    data.accounts.filter(a => isLive(a) && a.login4).forEach(a => taken[a.login4] = a.label);
     const seen = {};
     g('f-preview').innerHTML = plan.length ? `<div class="list">${plan.map(p => {
       if (p.skip) return `<div class="pv skip"><i style="background:var(--line)"></i><span>ID ${idHtml(p.loginId)} — ${esc(p.skip)}</span></div>`;
@@ -678,7 +706,7 @@ function updateFormHints(){
     g('f-cost-hint').textContent = multi ? `Chia đều: mỗi tài khoản ≈ ${money(total / n)}` : '';
   } else {
     const id = cleanId(raw);
-    const dup = id && data.accounts.find(x => x.id !== f.id && x.status !== 'breached' && x.login4 === last4(id));
+    const dup = id && data.accounts.find(x => x.id !== f.id && isLive(x) && x.login4 === last4(id));
     const lh = g('f-login-hint');
     lh.textContent = dup ? `4 số cuối trùng với "${dup.label}". Bước xác nhận sẽ không phân biệt được 2 tài khoản.`
                          : 'Dùng 4 số cuối để xác nhận khi ghi kết quả, chống bấm nhầm tài khoản.';
@@ -760,6 +788,7 @@ document.addEventListener('click', e => {
     case 'acc-pass': passAccount(id); break;
     case 'acc-breach': setBreached(id, true); break;
     case 'acc-restore': setBreached(id, false); break;
+    case 'acc-unpass': unpassAccount(id); break;
     case 'copy-id': copyText(v).then(ok => toast(ok ? `Đã sao chép ID ${v}` : 'Không sao chép được, hãy giữ ngón tay lên số để copy')); break;
     case 'paste-ids':
       if (!navigator.clipboard || !navigator.clipboard.readText){ toast('Máy không cho đọc bộ nhớ. Hãy giữ ngón tay trong ô rồi chọn Dán.'); break; }
