@@ -19,6 +19,8 @@ const CONFIG = {
   MIN_DAYS_NEW: 4,      // Số ngày lãi mỗi kỳ payout funded (tài khoản mua từ NEW_RULE_DATE)
   NEW_RULE_DATE: "2026-07-25", // Ngày bắt đầu áp luật 4 ngày lãi (năm-tháng-ngày)
   DAY_WIN: 0.5,         // Ngưỡng ngày lãi, % vốn ban đầu (5k -> $25)
+  PLAN_NEXT_TP: 50,     // Kế hoạch của thầy: TP các ngày sau, $. Ngày đầu TP = phần còn thiếu trừ đi các ngày sau
+                        //   (Vòng 1: 400 - 2x50 = $300; Vòng 2: 300 - 2x50 = $200; thua thì TP tự nâng lên)
   GOAT_GUARD: 2,        // Ngưỡng Goat Guard, % vốn ban đầu (5k -> $100)
   PAYOUT_SPLIT: 100,    // Tỷ lệ chia lợi nhuận (Profit split), %. Bạn mua add-on 100%
   PAYOUT_FIRST_DAYS: 14, // Số ngày sau khi lên Funded mới được rút lần đầu
@@ -132,6 +134,8 @@ textarea:focus{outline:2px solid var(--accent);outline-offset:1px}
 .alert.red{background:var(--red-bg);color:var(--red)}
 .alert.green{background:var(--green-bg);color:var(--green)}
 .alert.yellow{background:var(--yellow-bg);color:var(--yellow)}
+.plan{border-radius:12px;padding:10px 12px;margin-top:10px;font-size:15px;background:var(--chip)}
+.plan b{font-size:17px}
 .pill{display:inline-block;border-radius:999px;padding:4px 12px;font-size:15px;font-weight:600;margin-top:10px}
 .pill.yellow{background:var(--yellow-bg);color:var(--yellow)}
 .pill.green{background:var(--green-bg);color:var(--green)}
@@ -350,8 +354,12 @@ function compute(acc, today){
   const slLeft = buffer > 0 ? Math.ceil(buffer / s.SL - 1e-9) - 1 : 0;   // số lệnh SL còn chịu được mà chưa chạm sàn
   const todayTrades = trades.filter(r => r.tradingDay === today);
   const ready = acc.phase !== 'F' && remain <= 0 && winDays >= minDays;
+  // Kế hoạch TP hôm nay: các ngày còn lại mỗi ngày PLAN_NEXT_TP, hôm nay gánh phần còn thiếu
+  const daysLeft = Math.max(1, minDays - winDays);
+  const planNext = Math.max(+s.PLAN_NEXT_TP || 0, r2(size * s.DAY_WIN / 100));
+  const planTP = acc.phase === 'F' || ready ? 0 : r2(Math.max(planNext, remain - (daysLeft - 1) * planNext));
   const fundedDays = acc.phase === 'F' && acc.fundedDate ? daysBetween(acc.fundedDate, localDate(now())) : null;
-  return { balance, profit, target, remain, winDays, minDays, floor, buffer, slLeft, ready, fundedDays,
+  return { balance, profit, target, remain, winDays, minDays, floor, buffer, slLeft, ready, fundedDays, daysLeft, planNext, planTP,
            tradedToday: todayTrades.length > 0, todayPnl: r2(todayTrades.reduce((t, r) => t + +r.pnl, 0)) };
 }
 
@@ -448,6 +456,8 @@ function card(a, c, closed){
     if (c.ready) h += `<div class="alert green">✓ Đủ điều kiện lên vòng — bấm Quản lý để Pass</div>`;
     if (a.phase === 'F' && s.SL > a.size * s.GOAT_GUARD / 100)
       h += `<span class="pill red">Goat Guard: SL ${money(s.SL)} > ngưỡng ${money(a.size * s.GOAT_GUARD / 100)}</span> `;
+    if (c.planTP && !c.tradedToday && !a.openOrder)
+      h += `<div class="plan">🎯 Kế hoạch ${closed ? 'ngày tới' : 'hôm nay'}: TP <b class="pos">${money(c.planTP)}</b> · SL <b class="neg">${money(s.SL)}</b>${c.daysLeft > 1 ? `<br><span class="muted">Sau đó ${c.daysLeft - 1} ngày, mỗi ngày TP ${money(c.planNext)}</span>` : ''}</div>`;
     if (closed) h += `<span class="pill grey">Cuối tuần — thị trường đóng</span>`;
     else h += c.tradedToday
       ? `<span class="pill green">Đã đánh hôm nay ${signed(c.todayPnl)}</span>`
@@ -917,7 +927,12 @@ document.addEventListener('click', e => {
     case 'rec-out':
       keepAmount();
       if (v === 'L'){ ui.rec.amount = String(S().SL); ui.rec.autoAmount = true; }
-      else if (ui.rec.autoAmount){ ui.rec.amount = ''; ui.rec.autoAmount = false; }
+      else {
+        // Thắng: tự điền TP theo kế hoạch (sửa được)
+        const pc = compute(accById(ui.rec.id), ui.rec.day);
+        if (pc.planTP && (ui.rec.autoAmount || !ui.rec.amount)){ ui.rec.amount = String(pc.planTP); ui.rec.autoAmount = true; }
+        else if (ui.rec.autoAmount){ ui.rec.amount = ''; ui.rec.autoAmount = false; }
+      }
       ui.rec.out = v; renderRecord();
       if (v === 'W') document.getElementById('r-amt').focus();
       break;
