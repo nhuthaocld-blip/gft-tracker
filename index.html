@@ -137,7 +137,23 @@ textarea:focus{outline:2px solid var(--accent);outline-offset:1px}
 .pill.green{background:var(--green-bg);color:var(--green)}
 .pill.grey{background:var(--chip);color:var(--muted)}
 .pill.red{background:var(--red-bg);color:var(--red)}
-.c-btns{display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-top:12px}
+.c-btns{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:8px;margin-top:12px}
+.c-btns .btn{padding:0 8px}
+.order{border-radius:12px;padding:10px 12px;margin-top:10px;font-size:15px;border:2px dashed var(--yellow);background:var(--yellow-bg);color:var(--text)}
+.order.run{border-style:solid;border-color:var(--accent);background:var(--chip)}
+.order .ot{font-weight:800;font-size:16px}
+.order .ot.L{color:var(--green)} .order .ot.S{color:var(--red)}
+.order .od{color:var(--muted);margin-top:2px}
+.order .ow{color:var(--red);font-weight:700;margin-top:4px}
+.grid4{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.grid4 button{min-height:54px;border-radius:12px;border:2px solid var(--line);background:var(--bg);color:var(--text);font:inherit;font-size:16px;font-weight:700;cursor:pointer;line-height:1.2}
+.grid4 button small{display:block;font-weight:500;font-size:13px;color:var(--muted)}
+.grid4 button.on.g{background:var(--green);border-color:var(--green);color:#fff}
+.grid4 button.on.r{background:var(--red);border-color:var(--red);color:#fff}
+.grid4 button.on small{color:inherit;opacity:.85}
+.ov-orders{display:grid;gap:6px;border-top:1px solid var(--line);margin-top:10px;padding-top:10px;font-size:15px}
+.ov-orders .oi{display:flex;align-items:center;gap:8px}
+.ov-orders .oi i{flex:none;width:12px;height:12px;border-radius:999px}
 
 .btn{min-height:48px;border-radius:12px;border:1px solid var(--line);background:var(--chip);color:var(--text);font:inherit;font-weight:600;padding:0 16px;cursor:pointer;width:100%}
 .btn.primary{background:var(--accent);color:#fff;border-color:transparent}
@@ -207,7 +223,7 @@ const WD = ['CN','T2','T3','T4','T5','T6','T7'];
 
 let storageOk = true;
 let data = load();
-const ui = { filter:'active', rec:null, form:null };
+const ui = { filter:'active', rec:null, form:null, ord:null };
 
 // ---------- Lưu / đọc dữ liệu ----------
 function load(){
@@ -367,7 +383,9 @@ function render(){
       <div><b>${nPassed}</b><span>Hoàn thành</span></div>
       <div><b>${nDead}</b><span>Cháy</span></div>
     </div>
-    <div class="ov-line"><span class="ov-todo ${notTraded ? 'has' : ''}">${closed ? 'Cuối tuần — nghỉ' : `Chưa đánh hôm nay: ${notTraded}`}</span></div>
+    <div class="ov-line"><span class="ov-todo ${notTraded ? 'has' : ''}">${closed ? 'Cuối tuần — nghỉ' : `Chưa đánh hôm nay: ${notTraded}`}</span>
+      <span>Lệnh đang mở: <b>${active.filter(a => a.openOrder).length}</b></span></div>
+    ${ordersOverview(active, today)}
     <div class="ov-line"><span>Vốn đã bỏ ra <b>${money(cost)}</b></span><span>Payout đã về <b>${money(paid)}</b></span></div>
   </section>`;
 
@@ -380,7 +398,7 @@ function render(){
     return ui.filter === 'active' || a.phase === ui.filter;
   }).sort((a, b) => {
     // Chưa đánh hôm nay lên trước; trong mỗi nhóm giữ thứ tự đánh cố định của bạn
-    const ta = comp.get(a.id).tradedToday ? 1 : 0, tb = comp.get(b.id).tradedToday ? 1 : 0;
+    const ta = a.openOrder ? -1 : comp.get(a.id).tradedToday ? 1 : 0, tb = b.openOrder ? -1 : comp.get(b.id).tradedToday ? 1 : 0;
     return (ta - tb) || ((+a.order || 0) - (+b.order || 0)) || a.label.localeCompare(b.label);
   });
 
@@ -434,7 +452,9 @@ function card(a, c, closed){
     else h += c.tradedToday
       ? `<span class="pill green">Đã đánh hôm nay ${signed(c.todayPnl)}</span>`
       : `<span class="pill yellow">Chưa đánh hôm nay</span>`;
+    if (a.openOrder) h += orderBox(a, tradingDayAt(now()));
     h += `<div class="c-btns"><button class="btn primary" data-action="record" data-id="${a.id}">Ghi kết quả</button>
+          <button class="btn" data-action="order" data-id="${a.id}">${a.openOrder ? 'Sửa lệnh' : '+ Lệnh mở'}</button>
           <button class="btn" data-action="manage" data-id="${a.id}">Quản lý</button></div>`;
   } else {
     const nx = a.status === 'passed' && accById(a.nextId);
@@ -453,7 +473,7 @@ function openSheet(html){
 function closeSheet(){
   document.getElementById('sheet').hidden = true;
   document.body.style.overflow = '';
-  ui.rec = null; ui.form = null;
+  ui.rec = null; ui.form = null; ui.ord = null;
 }
 function sheetHead(title){ return `<div class="sh-head"><h2>${title}</h2><button class="x" data-action="close" aria-label="Đóng">✕</button></div>`; }
 let toastTimer;
@@ -469,7 +489,8 @@ function defaultDir(day){
 }
 function openRecord(id){
   const today = tradingDayAt(now());
-  ui.rec = { id, day: today, dir: defaultDir(today), dirTouched:false, out:null, amount:'', autoAmount:false };
+  const oo = (accById(id) || {}).openOrder;
+  ui.rec = { id, day: today, dir: oo ? ORDER_TYPES[oo.type].dir : defaultDir(today), dirTouched: !!oo, out:null, amount:'', autoAmount:false };
   renderRecord();
 }
 function renderRecord(){
@@ -517,10 +538,105 @@ function saveRecord(){
   const r = ui.rec, a = accById(r.id);
   const pnl = r2(r.out === 'W' ? +r.amount : -r.amount);
   data.results.push({ id:uid(), accountId:a.id, phase:a.phase, tradingDay:r.day, dir:r.dir, pnl, kind:'trade', createdAt:Date.now() });
+  delete a.openOrder;                                  // lệnh đã đóng -> bỏ khỏi danh sách lệnh đang mở
   closeSheet(); save();
   const c = compute(a, r.day);
   toast(`Đã lưu ${a.label}: ${signed(pnl)} → số dư ${money(c.balance)}`);
   if (c.balance <= c.floor) askBreach(a, c);
+}
+
+// ---------- Lệnh đang mở (Limit chờ khớp / lệnh đang chạy) ----------
+const ORDER_TYPES = {
+  BL: { t:'Buy Limit',  dir:'L', pending:true },
+  SL: { t:'Sell Limit', dir:'S', pending:true },
+  B:  { t:'Buy',  dir:'L', pending:false },
+  S:  { t:'Sell', dir:'S', pending:false }
+};
+function orderState(o){ return ORDER_TYPES[o.type].pending && !o.filled ? 'pending' : 'running'; }
+function orderLabel(o){ const T = ORDER_TYPES[o.type]; return orderState(o) === 'pending' ? `⏳ ${T.t} — chờ khớp` : `▶ ${T.dir === 'L' ? 'Buy' : 'Sell'} — đang chạy`; }
+function orderDetail(o){
+  const p = [];
+  if (o.entry) p.push('giá ' + o.entry); if (o.sl) p.push('SL ' + o.sl); if (o.tp) p.push('TP ' + o.tp); if (o.lot) p.push(o.lot + ' lot');
+  return p.join(' · ');
+}
+// Có tài khoản khác đang mở lệnh hoặc đã đánh hôm nay theo hướng ngược lại -> đối lệnh
+function hedgeWith(accId, dir, today){
+  const opp = dir === 'L' ? 'S' : 'L', out = [];
+  for (const x of data.accounts){
+    if (x.id === accId || !isLive(x)) continue;
+    if (x.openOrder && ORDER_TYPES[x.openOrder.type].dir === opp) out.push(x.label);
+    else if (data.results.some(r => r.accountId === x.id && r.kind !== 'adjust' && r.tradingDay === today && r.dir === opp)) out.push(x.label);
+  }
+  return out;
+}
+function orderBox(a, today){
+  const o = a.openOrder, T = ORDER_TYPES[o.type], st = orderState(o), det = orderDetail(o);
+  const old = o.tradingDay && o.tradingDay < today;
+  const hedge = hedgeWith(a.id, T.dir, today);
+  return `<div class="order ${st === 'running' ? 'run' : ''}">
+    <div class="ot ${T.dir}">${orderLabel(o)}</div>
+    ${det ? `<div class="od">${esc(det)}</div>` : ''}${o.note ? `<div class="od">${esc(o.note)}</div>` : ''}
+    ${old ? `<div class="ow">⚠ Lệnh từ ${fmtDay(o.tradingDay)} — đang giữ qua đêm?</div>` : ''}
+    ${hedge.length ? `<div class="ow">⚠ Ngược hướng với: ${esc(hedge.join(', '))}</div>` : ''}
+  </div>`;
+}
+function ordersOverview(active, today){
+  const list = active.filter(a => a.openOrder).sort((x, y) => (+x.order || 0) - (+y.order || 0));
+  if (!list.length) return '';
+  const dirs = new Set(list.map(a => ORDER_TYPES[a.openOrder.type].dir));
+  return `<div class="ov-orders">
+    ${list.map(a => `<div class="oi"><i style="background:${esc(a.color)}"></i><span><b>${esc(a.label)}</b> · ${orderLabel(a.openOrder)}${orderDetail(a.openOrder) ? ' · ' + esc(orderDetail(a.openOrder)) : ''}</span></div>`).join('')}
+    ${dirs.size > 1 ? `<div class="alert red" style="margin-top:2px">⚠ Đối lệnh (hedging): đang có cả lệnh Buy và Sell</div>` : ''}
+  </div>`;
+}
+function openOrderForm(id){
+  const a = accById(id), o = a.openOrder || {};
+  ui.ord = { id, type:o.type || null, entry:o.entry || '', sl:o.sl || '', tp:o.tp || '', lot:o.lot || '', note:o.note || '' };
+  renderOrder();
+}
+function keepOrderInputs(){
+  for (const k of ['entry','sl','tp','lot','note']){ const el = document.getElementById('o-' + k); if (el) ui.ord[k] = el.value.trim(); }
+}
+function renderOrder(){
+  const r = ui.ord, a = accById(r.id), o = a.openOrder, today = tradingDayAt(now());
+  let h = sheetHead(o ? 'Lệnh đang mở' : 'Ghi lệnh mở');
+  h += `<div class="idblock" style="--acc:${esc(a.color)};--on:${textOn(a.color)}"><div class="l1">${esc(a.label)}</div>
+        <div class="l2">${a.loginId ? 'ID …' + esc(a.login4) : 'chưa nhập ID'} · ${PHASES[a.phase]}</div></div>`;
+  if (o){
+    h += `<div class="summary">Hiện tại: <b>${orderLabel(o)}</b>${orderDetail(o) ? '<br>' + esc(orderDetail(o)) : ''}</div>`;
+    h += `<div class="c-btns" style="grid-template-columns:1fr 1fr;margin:0 0 14px">
+            ${orderState(o) === 'pending' ? `<button class="btn" style="background:var(--accent);color:#fff" data-action="ord-fill">✓ Đã khớp</button>` : ''}
+            <button class="btn primary" data-action="ord-close">Đóng lệnh → ghi kết quả</button>
+            <button class="btn danger" data-action="ord-cancel" data-confirm>${orderState(o) === 'pending' ? 'Huỷ lệnh chờ' : 'Xoá (ghi nhầm)'}</button>
+          </div><h3>Sửa lệnh</h3>`;
+  }
+  const btn = (k, cls, sub) => `<button class="${cls} ${r.type === k ? 'on' : ''}" data-action="ord-type" data-v="${k}">${ORDER_TYPES[k].t}<small>${sub}</small></button>`;
+  h += `<div class="field"><div class="lbl">Loại lệnh</div><div class="grid4">
+          ${btn('BL', 'g', 'chờ khớp')}${btn('SL', 'r', 'chờ khớp')}${btn('B', 'g', 'đang chạy')}${btn('S', 'r', 'đang chạy')}
+        </div></div>`;
+  const num = (k, lbl, ph) => `<div class="field"><label for="o-${k}">${lbl}</label><input id="o-${k}" inputmode="decimal" placeholder="${ph}" value="${esc(r[k])}"></div>`;
+  h += `<div class="two">${num('entry', 'Giá vào', 'không bắt buộc')}${num('lot', 'Lot', 'ví dụ 0.10')}</div>`;
+  h += `<div class="two">${num('sl', 'Giá SL', 'không bắt buộc')}${num('tp', 'Giá TP', 'không bắt buộc')}</div>`;
+  h += `<div class="field"><label for="o-note">Ghi chú</label><input id="o-note" placeholder="không bắt buộc" value="${esc(r.note)}" maxlength="80"></div>`;
+  if (r.type){
+    const hedge = hedgeWith(a.id, ORDER_TYPES[r.type].dir, today);
+    if (hedge.length) h += `<div class="alert yellow" style="margin:0 0 12px">⚠ Đối lệnh: ${esc(hedge.join(', '))} đang/đã đánh hướng ngược lại hôm nay.</div>`;
+    if (!o && data.results.some(x => x.accountId === a.id && x.kind !== 'adjust' && x.tradingDay === today))
+      h += `<div class="alert yellow" style="margin:0 0 12px">⚠ Tài khoản này đã đánh 1 lệnh hôm nay.</div>`;
+  }
+  h += `<button class="btn primary" data-action="ord-save" ${r.type ? '' : 'disabled'}>${o ? 'Lưu thay đổi' : 'Lưu lệnh'}</button>`;
+  openSheet(h);
+}
+function saveOrder(){
+  keepOrderInputs();
+  const r = ui.ord, a = accById(r.id); if (!r.type) return;
+  const prev = a.openOrder || {};
+  const sameKind = prev.type && ORDER_TYPES[prev.type].pending === ORDER_TYPES[r.type].pending;
+  a.openOrder = { type:r.type, entry:r.entry, sl:r.sl, tp:r.tp, lot:r.lot, note:r.note,
+                  filled: sameKind ? !!prev.filled : false,
+                  tradingDay: prev.tradingDay || tradingDayAt(now()), createdAt: prev.createdAt || Date.now() };
+  closeSheet(); save();
+  toast(`${a.label}: ${orderLabel(a.openOrder)}`);
 }
 
 // ---------- Pass / Cháy ----------
@@ -571,7 +687,7 @@ function passAccount(id){
                purchaseDate:a.purchaseDate, order:a.order, phase:to, status:'active',
                fundedDate: to === 'F' ? today : '', goatGuardHits:0, prevId:a.id, batchNo:a.batchNo || 0 };
   data.accounts.push(nx);
-  Object.assign(a, { status:'passed', passedDate:today, nextId:nx.id });
+  Object.assign(a, { status:'passed', passedDate:today, nextId:nx.id }); delete a.openOrder;
   save(); closeSheet();
   toast(`🎉 ${a.label} pass ${PHASES[a.phase]} → đã tạo tài khoản ${NEXT_NAME[a.phase]} mới`);
 }
@@ -585,7 +701,7 @@ function unpassAccount(id){
 }
 function setBreached(id, on){
   const a = accById(id); if (!a) return;
-  a.status = on ? 'breached' : 'active';
+  a.status = on ? 'breached' : 'active'; if (on) delete a.openOrder;
   a.breachedDate = on ? localDate(now()) : '';
   save(); closeSheet();
   toast(on ? `${a.label} đã chuyển vào mục Cháy` : `Đã khôi phục ${a.label}`);
@@ -806,6 +922,12 @@ document.addEventListener('click', e => {
       if (v === 'W') document.getElementById('r-amt').focus();
       break;
     case 'rec-save': saveRecord(); break;
+    case 'order': openOrderForm(id); break;
+    case 'ord-type': keepOrderInputs(); ui.ord.type = v; renderOrder(); break;
+    case 'ord-save': saveOrder(); break;
+    case 'ord-fill': { const a = accById(ui.ord.id); a.openOrder.filled = true; closeSheet(); save(); toast(`${a.label}: lệnh đã khớp, đang chạy`); break; }
+    case 'ord-cancel': { const a = accById(ui.ord.id); delete a.openOrder; closeSheet(); save(); toast(`${a.label}: đã xoá lệnh mở`); break; }
+    case 'ord-close': { const aid = ui.ord.id; closeSheet(); openRecord(aid); break; }
     case 'acc-color': ui.form.color = v; document.getElementById('f-colors').innerHTML = swatches(); updateFormHints(); break;
     case 'acc-save': saveAccount(); break;
     case 'acc-pass': passAccount(id); break;
