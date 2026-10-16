@@ -81,6 +81,27 @@ b,.num{font-variant-numeric:tabular-nums}
 
 header{margin-bottom:12px}
 header h1{font-size:22px;margin:0 0 2px}
+.hrow{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.hbtns{display:flex;gap:8px;flex:none}
+.hbtn{min-height:44px;min-width:44px;padding:0 12px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--text);font:inherit;font-size:15px;font-weight:600;cursor:pointer}
+.hbtn.on{background:var(--text);color:var(--bg);border-color:var(--text)}
+.st-card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow)}
+.st-card h2{font-size:17px;margin:0 0 10px}
+.kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media (min-width:520px){.kpis{grid-template-columns:repeat(3,1fr)}}
+.kpi{background:var(--bg);border-radius:12px;padding:10px 12px}
+.kpi .k{font-size:14px;color:var(--muted)}
+.kpi .v{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.25}
+.kpi .s{font-size:13px;color:var(--muted)}
+.st-tbl{width:100%;border-collapse:collapse;font-size:15px;font-variant-numeric:tabular-nums}
+.st-tbl th,.st-tbl td{padding:8px 4px;border-bottom:1px solid var(--line);text-align:right}
+.st-tbl th:first-child,.st-tbl td:first-child{text-align:left}
+.st-tbl th{font-size:13px;color:var(--muted);font-weight:600}
+.wrbar{height:8px;border-radius:999px;background:var(--red-bg);overflow:hidden;margin-top:6px}
+.wrbar i{display:block;height:100%;background:var(--green)}
+.st-sel{display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:4px}
+.eq svg{width:100%;height:auto;display:block}
+.note{font-size:14px;color:var(--muted);margin-top:8px}
 .daybar{color:var(--muted);font-size:15px}
 
 .banner{border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:15px}
@@ -227,7 +248,23 @@ const WD = ['CN','T2','T3','T4','T5','T6','T7'];
 
 let storageOk = true;
 let data = load();
-const ui = { filter:'active', rec:null, form:null, ord:null };
+const ui = { filter:'active', rec:null, form:null, ord:null, view:'main', stAcc:'all', stPhase:'all' };
+// Giao diện sáng/tối: auto (theo máy) -> light -> dark, nhớ trên máy này
+const THEMES = ['auto', 'light', 'dark'], THEME_ICON = { auto:'🌓', light:'☀️', dark:'🌙' };
+function getTheme(){ try { return localStorage.getItem('gft-theme') || 'auto'; } catch(e){ return 'auto'; } }
+function applyTheme(t){
+  if (t === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', t);
+  try { localStorage.setItem('gft-theme', t); } catch(e){}
+}
+applyTheme(getTheme());
+function headerButtons(){
+  const t = getTheme();
+  return `<div class="hbtns">
+    <button class="hbtn ${ui.view === 'stats' ? 'on' : ''}" data-action="view" data-v="${ui.view === 'stats' ? 'main' : 'stats'}">${ui.view === 'stats' ? '← Tài khoản' : '📊 Thống kê'}</button>
+    <button class="hbtn" data-action="theme" title="Giao diện: ${t === 'auto' ? 'theo máy' : t === 'light' ? 'sáng' : 'tối'}">${THEME_ICON[t]}</button>
+  </div>`;
+}
 
 // ---------- Lưu / đọc dữ liệu ----------
 function load(){
@@ -365,6 +402,7 @@ function compute(acc, today){
 
 // ---------- Trang chính ----------
 function render(){
+  if (ui.view === 'stats') return renderStats();
   const ms = now(), today = tradingDayAt(ms), closed = marketClosedAt(ms);
   const accs = data.accounts;
   const comp = new Map(accs.map(a => [a.id, compute(a, today)]));
@@ -375,7 +413,7 @@ function render(){
   const cost = accs.reduce((t, a) => t + (+a.cost || 0), 0);
   const paid = data.payouts.filter(p => p.status === 'paid').reduce((t, p) => t + (+(p.received ?? p.amount) || 0), 0);
 
-  let h = `<header><h1>GFT Tracker</h1><div class="daybar">`;
+  let h = `<header><div class="hrow"><h1>GFT Tracker</h1>${headerButtons()}</div><div class="daybar">`;
   h += closed
     ? `Cuối tuần, thị trường đóng · Ngày giao dịch tiếp theo: <b>${fmtDay(today)}</b>`
     : `Ngày giao dịch: <b>${fmtDay(today)}</b> · sang ngày mới lúc <b>${fmtTime(nextResetMs(ms))}</b> (giờ máy)`;
@@ -472,6 +510,129 @@ function card(a, c, closed){
     h += `<div class="c-btns" style="grid-template-columns:1fr"><button class="btn" data-action="manage" data-id="${a.id}">Quản lý</button></div>`;
   }
   return h + `</article>`;
+}
+
+// ---------- Trang thống kê ----------
+const pct = x => (isFinite(x) ? Math.round(x * 1000) / 10 : 0) + '%';
+const fx = (x, d = 2) => isFinite(x) ? x.toFixed(d) : '—';
+function calcStats(trades){
+  const t = trades.slice().sort((a, b) => a.tradingDay.localeCompare(b.tradingDay) || a.createdAt - b.createdAt);
+  const wins = t.filter(r => r.pnl > 0), losses = t.filter(r => r.pnl < 0);
+  const gw = wins.reduce((x, r) => x + +r.pnl, 0), gl = Math.abs(losses.reduce((x, r) => x + +r.pnl, 0));
+  const net = r2(gw - gl), n = t.length, decided = wins.length + losses.length;
+  const avgW = wins.length ? gw / wins.length : 0, avgL = losses.length ? gl / losses.length : 0;
+  const rr = avgL ? avgW / avgL : (avgW ? Infinity : 0);
+  // Chuỗi thắng/thua, sụt giảm lớn nhất của đường lãi lỗ cộng dồn
+  let cw = 0, cl = 0, mw = 0, ml = 0, cum = 0, peak = 0, mdd = 0;
+  const curve = [0];
+  for (const r of t){
+    if (r.pnl > 0){ cw++; cl = 0; } else if (r.pnl < 0){ cl++; cw = 0; } else { cw = 0; cl = 0; }
+    mw = Math.max(mw, cw); ml = Math.max(ml, cl);
+    cum += +r.pnl; curve.push(r2(cum)); peak = Math.max(peak, cum); mdd = Math.max(mdd, peak - cum);
+  }
+  const SLv = +S().SL || 1;
+  const days = {}; t.forEach(r => days[r.tradingDay] = (days[r.tradingDay] || 0) + +r.pnl);
+  const dv = Object.values(days);
+  return {
+    n, wins:wins.length, losses:losses.length, be:n - decided,
+    winRate: decided ? wins.length / decided : 0,
+    gw, gl, net, pf: gl ? gw / gl : (gw ? Infinity : 0),
+    avgW, avgL, rr, exp: n ? net / n : 0,
+    avgR: n ? t.reduce((x, r) => x + r.pnl / SLv, 0) / n : 0, totalR: t.reduce((x, r) => x + r.pnl / SLv, 0),
+    best: n ? Math.max(...t.map(r => +r.pnl)) : 0, worst: n ? Math.min(...t.map(r => +r.pnl)) : 0,
+    mw, ml, mdd: r2(mdd), curve, cw, cl,
+    beWR: rr && isFinite(rr) ? 1 / (1 + rr) : 0,
+    days: dv.length, greenDays: dv.filter(v => v > 0).length,
+    bestDay: dv.length ? Math.max(...dv) : 0, worstDay: dv.length ? Math.min(...dv) : 0
+  };
+}
+function kpi(k, v, sub, cls){ return `<div class="kpi"><div class="k">${k}</div><div class="v ${cls || ''}">${v}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`; }
+function equitySvg(curve){
+  if (curve.length < 2) return '<div class="note">Cần ít nhất 1 lệnh để vẽ đường lãi lỗ.</div>';
+  const W = 600, H = 180, P = 8, min = Math.min(0, ...curve), max = Math.max(0, ...curve), span = (max - min) || 1;
+  const X = i => P + i * (W - 2 * P) / (curve.length - 1), Y = v => P + (max - v) * (H - 2 * P) / span;
+  const pts = curve.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' ');
+  const last = curve[curve.length - 1], col = last >= 0 ? 'var(--green)' : 'var(--red)';
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Đường lãi lỗ cộng dồn">
+    <line x1="${P}" x2="${W - P}" y1="${Y(0)}" y2="${Y(0)}" stroke="var(--line)" stroke-width="2" stroke-dasharray="6 6"/>
+    <polygon points="${X(0)},${Y(0)} ${pts} ${X(curve.length - 1)},${Y(0)}" fill="${col}" opacity=".12"/>
+    <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${X(curve.length - 1)}" cy="${Y(last)}" r="5" fill="${col}"/>
+  </svg>`;
+}
+function groupRows(groups){
+  return groups.map(([name, list]) => {
+    const st = calcStats(list);
+    return `<tr><td>${name}</td><td>${st.n}</td><td>${st.n ? pct(st.winRate) : '—'}</td><td>${st.n ? fx(st.rr) : '—'}</td><td class="${st.net > 0 ? 'pos' : st.net < 0 ? 'neg' : ''}">${st.n ? signed(st.net) : '—'}</td></tr>`;
+  }).join('');
+}
+function renderStats(){
+  const accs = data.accounts;
+  const inAcc = r => ui.stAcc === 'all' ? true : ui.stAcc === 'live' ? isLive(accById(r.accountId) || {}) : r.accountId === ui.stAcc;
+  const trades = data.results.filter(r => r.kind !== 'adjust' && accById(r.accountId) && inAcc(r) && (ui.stPhase === 'all' || r.phase === ui.stPhase));
+  const st = calcStats(trades);
+
+  let h = `<header><div class="hrow"><h1>Thống kê</h1>${headerButtons()}</div>
+           <div class="daybar">Tính từ các kết quả đã ghi. Lệnh "đối chiếu số dư" không tính.</div></header>`;
+  h += `<div class="st-sel"><select id="st-acc">
+          <option value="all" ${ui.stAcc === 'all' ? 'selected' : ''}>Tất cả tài khoản</option>
+          <option value="live" ${ui.stAcc === 'live' ? 'selected' : ''}>Chỉ tài khoản đang chạy</option>
+          ${accs.slice().sort((a, b) => (+a.order || 0) - (+b.order || 0)).map(a => `<option value="${a.id}" ${ui.stAcc === a.id ? 'selected' : ''}>${esc(a.label)} · ${PHASES[a.phase]}${a.loginId ? ' · …' + esc(a.login4) : ''}${a.status === 'passed' ? ' (đã pass)' : a.status === 'breached' ? ' (cháy)' : ''}</option>`).join('')}
+        </select></div>`;
+  h += `<nav class="chips">${[['all','Mọi vòng'],['P1','Vòng 1'],['P2','Vòng 2'],['F','Funded']].map(([k, t]) => `<button class="chip ${ui.stPhase === k ? 'on' : ''}" data-action="st-phase" data-v="${k}">${t}</button>`).join('')}</nav>`;
+
+  if (!st.n){
+    h += `<div class="empty">Chưa có lệnh nào trong mục này.<br>Ghi kết quả vài lệnh rồi quay lại xem nhé.</div>`;
+  } else {
+    h += `<section class="st-card"><h2>Tổng quan</h2><div class="kpis">
+      ${kpi('Tỷ lệ thắng (Win rate)', pct(st.winRate), `${st.wins} thắng · ${st.losses} thua${st.be ? ' · ' + st.be + ' hoà' : ''}`, st.winRate >= st.beWR ? 'pos' : 'neg')}
+      ${kpi('RR thực tế (avg Win / avg Loss)', isFinite(st.rr) ? '1 : ' + fx(st.rr) : '∞', `Win rate hoà vốn: ${pct(st.beWR)}`)}
+      ${kpi('Lãi/lỗ ròng (Net P&L)', signed(st.net), `${st.n} lệnh`, st.net >= 0 ? 'pos' : 'neg')}
+      ${kpi('Profit factor', isFinite(st.pf) ? fx(st.pf) : '∞', 'Tổng lãi / tổng lỗ · tốt khi > 1.5')}
+      ${kpi('Kỳ vọng mỗi lệnh (Expectancy)', signed(st.exp), `${fx(st.avgR)} R mỗi lệnh`, st.exp >= 0 ? 'pos' : 'neg')}
+      ${kpi('Tổng R', (st.totalR >= 0 ? '+' : '') + fx(st.totalR, 1) + ' R', `1R = SL ${money(S().SL)}`, st.totalR >= 0 ? 'pos' : 'neg')}
+    </div>
+    <div class="wrbar" title="Tỷ lệ thắng"><i style="width:${st.winRate * 100}%"></i></div></section>`;
+
+    h += `<section class="st-card eq"><h2>Đường lãi lỗ cộng dồn (Equity curve)</h2>${equitySvg(st.curve)}
+      <div class="note">Sụt giảm lớn nhất từ đỉnh (Max drawdown): <b class="neg">${money(st.mdd)}</b></div></section>`;
+
+    h += `<section class="st-card"><h2>Chi tiết lệnh</h2><div class="kpis">
+      ${kpi('Lãi trung bình', money(st.avgW), 'mỗi lệnh thắng', 'pos')}
+      ${kpi('Lỗ trung bình', money(-st.avgL), 'mỗi lệnh thua', 'neg')}
+      ${kpi('Lệnh tốt nhất', signed(st.best), '', 'pos')}
+      ${kpi('Lệnh tệ nhất', signed(st.worst), '', 'neg')}
+      ${kpi('Chuỗi thắng dài nhất', st.mw, st.cw ? `đang thắng ${st.cw} lệnh liên tiếp` : '')}
+      ${kpi('Chuỗi thua dài nhất', st.ml, st.cl ? `đang thua ${st.cl} lệnh liên tiếp` : '')}
+      ${kpi('Số ngày giao dịch', st.days, `${st.greenDays} ngày lãi · ${pct(st.days ? st.greenDays / st.days : 0)}`)}
+      ${kpi('Ngày lãi nhất / lỗ nhất', signed(st.bestDay), signed(st.worstDay))}
+    </div></section>`;
+
+    const by = (keyFn, keys) => keys.map(([k, name]) => [name, trades.filter(r => keyFn(r) === k)]).filter(([, l]) => l.length);
+    const head = `<tr><th></th><th>Lệnh</th><th>Win rate</th><th>RR</th><th>Lãi/lỗ</th></tr>`;
+    h += `<section class="st-card"><h2>Long và Short</h2><table class="st-tbl">${head}${groupRows(by(r => r.dir, [['L','▲ Long'],['S','▼ Short']]))}</table></section>`;
+    h += `<section class="st-card"><h2>Theo thứ trong tuần</h2><table class="st-tbl">${head}${groupRows(by(r => dow(r.tradingDay), [[1,'Thứ 2'],[2,'Thứ 3'],[3,'Thứ 4'],[4,'Thứ 5'],[5,'Thứ 6']]))}</table></section>`;
+    if (ui.stAcc === 'all' || ui.stAcc === 'live'){
+      const accRows = accs.filter(a => trades.some(r => r.accountId === a.id)).sort((a, b) => (+a.order || 0) - (+b.order || 0))
+        .map(a => [`<i style="display:inline-block;width:10px;height:10px;border-radius:9px;background:${esc(a.color)}"></i> ${esc(a.label)} <span class="muted">${PHASES[a.phase]}</span>`, trades.filter(r => r.accountId === a.id)]);
+      h += `<section class="st-card"><h2>Theo tài khoản</h2><table class="st-tbl">${head}${groupRows(accRows)}</table></section>`;
+    }
+  }
+
+  // Kết quả thi quỹ: tỷ lệ pass, vốn bỏ ra và payout
+  const ended = ph => accs.filter(a => a.phase === ph && (a.status === 'passed' || a.status === 'breached'));
+  const passRate = ph => { const e = ended(ph), p = e.filter(a => a.status === 'passed').length; return e.length ? `${pct(p / e.length)} <span class="s">(${p}/${e.length})</span>` : '—'; };
+  const cost = accs.reduce((x, a) => x + (+a.cost || 0), 0);
+  const paid = data.payouts.filter(p => p.status === 'paid').reduce((x, p) => x + (+(p.received ?? p.amount) || 0), 0);
+  h += `<section class="st-card"><h2>Kết quả thi quỹ</h2><div class="kpis">
+    ${kpi('Tỷ lệ pass Vòng 1', passRate('P1'))}
+    ${kpi('Tỷ lệ pass Vòng 2', passRate('P2'))}
+    ${kpi('Đang Funded', accs.filter(a => isLive(a) && a.phase === 'F').length, `${accs.filter(a => a.status === 'breached').length} tài khoản đã cháy`)}
+    ${kpi('Lời/lỗ sau chi phí', signed(paid - cost), `Payout ${money(paid)} − vốn ${money(cost)}`, paid - cost >= 0 ? 'pos' : 'neg')}
+  </div><div class="note">Tỷ lệ pass chỉ tính các tài khoản đã kết thúc vòng đó (đã pass hoặc đã cháy).</div></section>`;
+
+  h += `<div class="foot"><button class="btn" data-action="view" data-v="main">← Về trang tài khoản</button></div>`;
+  document.getElementById('app').innerHTML = h;
 }
 
 // ---------- Cửa sổ trượt ----------
@@ -913,6 +1074,9 @@ document.addEventListener('click', e => {
   switch (act){
     case 'close': closeSheet(); break;
     case 'filter': ui.filter = v; render(); break;
+    case 'view': ui.view = v; render(); scrollTo(0, 0); break;
+    case 'theme': applyTheme(THEMES[(THEMES.indexOf(getTheme()) + 1) % 3]); render(); break;
+    case 'st-phase': ui.stPhase = v; render(); break;
     case 'add-account': openAccountForm(null); break;
     case 'add-combo': {
       openAccountForm(null);
@@ -979,6 +1143,7 @@ document.addEventListener('input', e => {
 });
 document.addEventListener('change', e => {
   const t = e.target;
+  if (t.id === 'st-acc'){ ui.stAcc = t.value; render(); return; }
   if (ui.rec && t.id === 'r-day' && t.value){
     keepAmount();
     ui.rec.day = t.value;
