@@ -29,8 +29,11 @@ const CONFIG = {
   DAY_RESET_TZ: "America/New_York", // Múi giờ tính ngày giao dịch
   DAY_RESET_HOUR: 17,   // Giờ sang ngày mới theo New York (17 = 5PM)
   SIZES: [5000, 8000, 15000, 25000, 50000, 100000, 150000], // Các size tài khoản để chọn khi thêm
-  DIR_MAX_STREAK: 2     // Chống đánh 1 chiều: cùng hướng (Buy/Sell) tối đa bao nhiêu ngày liền.
+  DIR_MAX_STREAK: 2,    // Chống đánh 1 chiều: cùng hướng (Buy/Sell) tối đa bao nhiêu ngày liền.
                         //   Đạt mức này thì lệnh tiếp theo BẮT BUỘC đổi hướng. 1 ngày thì chỉ nhắc nên đổi.
+  // Lưu lên mây (Supabase). Để trống 2 dòng này thì app chỉ lưu trên máy như cũ.
+  CLOUD_URL: "",        // Project URL, ví dụ "https://abcdxyz.supabase.co"
+  CLOUD_KEY: ""         // anon / publishable key (khoá công khai của project)
 };
 </script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -284,7 +287,7 @@ function applyTheme(t){
 applyTheme(getTheme());
 function headerButtons(){
   const t = getTheme();
-  return `<div class="hbtns"><button class="hbtn" data-action="theme" title="Giao diện: ${t === 'auto' ? 'theo máy' : t === 'light' ? 'sáng' : 'tối'}">${THEME_ICON[t]}</button></div>`;
+  return `<div class="hbtns">${syncBadge()}<button class="hbtn" data-action="theme" title="Giao diện: ${t === 'auto' ? 'theo máy' : t === 'light' ? 'sáng' : 'tối'}">${THEME_ICON[t]}</button></div>`;
 }
 // 3 trang tách biệt: Tài khoản (chính) · Thống kê · Payout
 function topNav(){
@@ -304,6 +307,7 @@ function normalize(d){
   const saved = d.settings || {};
   const settings = { ...CONFIG, ...saved };
   delete settings.ACCOUNT_PRICES; delete settings.COMBO_PRICES;   // bản cũ: giá tự điền, nay nhập tay
+  delete settings.CLOUD_URL; delete settings.CLOUD_KEY;           // cấu hình máy chủ luôn lấy từ CONFIG
   return {
     version: 1,
     settings,
@@ -318,6 +322,7 @@ function save(){
   data.updatedAt = Date.now();
   try { localStorage.setItem(STORE_KEY, JSON.stringify(data)); storageOk = true; }
   catch(e){ storageOk = false; }
+  schedulePush();
   render();
 }
 
@@ -428,6 +433,7 @@ function compute(acc, today){
 
 // ---------- Trang chính ----------
 function render(){
+  if (cloudOn() && !sess.hash) return renderLogin();
   if (ui.view === 'stats') return renderStats();
   if (ui.view === 'payout') return renderPayout();
   const ms = now(), today = tradingDayAt(ms), closed = marketClosedAt(ms);
@@ -483,7 +489,7 @@ function render(){
   else h += list.map(a => card(a, comp.get(a.id), closed)).join('');
 
   h += `<div class="foot"><button class="btn primary" data-action="add-account">+ Thêm tài khoản</button></div>`;
-  if (data.updatedAt) h += `<div class="saved-at">Dữ liệu lưu trên máy này · sửa lần cuối ${fmtStamp(data.updatedAt)}</div>`;
+  if (data.updatedAt) h += `<div class="saved-at">${cloudOn() ? 'Dữ liệu lưu trên mây (đăng nhập bằng mã cá nhân)' : 'Dữ liệu lưu trên máy này'} · sửa lần cuối ${fmtStamp(data.updatedAt)}</div>`;
   document.getElementById('app').innerHTML = h;
 }
 
@@ -826,6 +832,133 @@ function savePayout(){
                       paidDate: r.status === 'paid' ? r.date : '', createdAt:Date.now() });
   closeSheet(); save();
   toast(`Đã ghi payout ${money(received)}`);
+}
+
+// ---------- Lưu lên mây (Supabase) + đăng nhập bằng mã cá nhân ----------
+// Mã cá nhân không gửi đi nguyên văn: app băm (SHA-256) rồi mới dùng làm khoá lưu trữ.
+const CLOUD = { url:String(CONFIG.CLOUD_URL || '').trim().replace(/\/+$/, ''), key:String(CONFIG.CLOUD_KEY || '').trim() };
+const cloudOn = () => !!(CLOUD.url && CLOUD.key);
+const CODE_KEY = 'gft-code';
+const sess = { code:'', hash:'', ready:false, status:'idle', cloudAt:'', dirty:false, err:'' };
+let pushTimer = null;
+function normCode(c){ return String(c || '').trim().toLowerCase().replace(/\s+/g, ''); }
+async function hashCode(c){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('gft-tracker:' + normCode(c)));
+  return [...new Uint8Array(buf)].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+async function rpc(fn, body){
+  const r = await fetch(`${CLOUD.url}/rest/v1/rpc/${fn}`, {
+    method:'POST', headers:{ apikey:CLOUD.key, Authorization:'Bearer ' + CLOUD.key, 'Content-Type':'application/json' },
+    body:JSON.stringify(body)
+  });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const t = await r.text();
+  return t ? JSON.parse(t) : null;
+}
+function cacheLocal(){ try { localStorage.setItem(STORE_KEY, JSON.stringify(data)); storageOk = true; } catch(e){ storageOk = false; } }
+// Đẩy dữ liệu lên mây (gom nhiều lần sửa liên tiếp thành 1 lần gửi)
+function schedulePush(){
+  if (!cloudOn() || !sess.hash) return;
+  sess.dirty = true; sess.status = 'saving';
+  clearTimeout(pushTimer); pushTimer = setTimeout(pushNow, 700);
+}
+async function pushNow(){
+  if (!sess.hash || !sess.dirty) return;
+  try {
+    const at = await rpc('gft_put', { p_hash:sess.hash, p_data:data });
+    if (!at) throw new Error('Không tìm thấy tài khoản trên mây');
+    sess.cloudAt = at; sess.dirty = false; sess.status = 'synced'; sess.err = '';
+  } catch(e){ sess.status = 'offline'; sess.err = e.message; }
+  renderSync();
+}
+// Lấy bản mới nhất trên mây (khi mở lại app / đổi máy)
+async function pullLatest(force){
+  if (!sess.hash) return;
+  if (sess.dirty){ await pushNow(); if (sess.dirty) return; }
+  try {
+    const row = await rpc('gft_get', { p_hash:sess.hash });
+    if (!row){ logout('Mã này không còn trên mây. Hãy đăng nhập lại.'); return; }
+    if (force || row.updated_at !== sess.cloudAt){
+      data = normalize(row.data); sess.cloudAt = row.updated_at; cacheLocal(); render();
+    }
+    sess.status = 'synced'; sess.err = '';
+  } catch(e){ sess.status = 'offline'; sess.err = e.message; }
+  renderSync();
+}
+function syncBadge(){
+  if (!cloudOn() || !sess.hash) return '';
+  const st = { saving:['⏳','Đang lưu…'], synced:['☁️','Đã lưu lên mây'], offline:['⚠️','Chưa lưu được — sẽ thử lại'], idle:['☁️','Đã kết nối'] }[sess.status] || ['☁️', ''];
+  return `<button class="hbtn sync ${sess.status}" data-action="me" title="${st[1]}">${st[0]}</button>`;
+}
+function renderSync(){ const b = document.querySelector('.hbtn.sync'); if (b) b.outerHTML = syncBadge(); }
+async function startSession(code, mode){
+  const err = document.getElementById('lg-err');
+  const c = normCode(code);
+  if (c.length < 6){ err.textContent = 'Mã cá nhân cần ít nhất 6 ký tự (nên dùng cả chữ và số).'; return; }
+  err.textContent = ''; document.querySelectorAll('.login .btn').forEach(b => b.disabled = true);
+  try {
+    const h = await hashCode(c);
+    if (mode === 'create'){
+      const keep = document.getElementById('lg-keep');
+      const start = keep && keep.checked ? data : normalize(null);
+      start.updatedAt = Date.now();
+      const ok = await rpc('gft_create', { p_hash:h, p_data:start });
+      if (!ok){ err.textContent = 'Mã này đã có người dùng. Chọn mã khác, hoặc bấm Đăng nhập nếu đó là mã của bạn.'; return; }
+      data = normalize(start);
+    } else {
+      const row = await rpc('gft_get', { p_hash:h });
+      if (!row){ err.textContent = 'Không tìm thấy mã này. Kiểm tra lại, hoặc bấm "Tạo tài khoản mới".'; return; }
+      data = normalize(row.data); sess.cloudAt = row.updated_at;
+    }
+    Object.assign(sess, { code:c, hash:h, status:'synced', dirty:false });
+    try { localStorage.setItem(CODE_KEY, c); } catch(e){}
+    cacheLocal(); render();
+    toast(mode === 'create' ? 'Đã tạo tài khoản. Dữ liệu sẽ tự lưu lên mây.' : 'Đăng nhập thành công');
+    if (mode === 'create') pullLatest(true);
+  } catch(e){
+    err.textContent = 'Không kết nối được máy chủ (' + e.message + '). Kiểm tra mạng rồi thử lại.';
+  } finally { document.querySelectorAll('.login .btn').forEach(b => b.disabled = false); }
+}
+function logout(msg){
+  try { localStorage.removeItem(CODE_KEY); localStorage.removeItem(STORE_KEY); } catch(e){}
+  Object.assign(sess, { code:'', hash:'', status:'idle', cloudAt:'', dirty:false });
+  data = normalize(null); closeSheet(); ui.view = 'main'; render();
+  if (msg) toast(msg);
+}
+function renderLogin(){
+  const hasLocal = data.accounts.length > 0;
+  document.getElementById('app').innerHTML = `
+    <header><div class="hrow"><h1>GFT Tracker</h1>${headerButtons()}</div><div class="daybar">Đăng nhập để dữ liệu được lưu lên mây, đổi máy không mất.</div></header>
+    <section class="st-card login">
+      <div class="field"><label for="lg-code">Mã cá nhân</label>
+        <input id="lg-code" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Ví dụ: thao2026gold">
+        <div class="hint">Không cần mật khẩu. Ai biết mã này sẽ xem được dữ liệu, nên chọn mã khó đoán (ít nhất 6 ký tự, có cả chữ và số) và đừng chia sẻ.</div></div>
+      ${hasLocal ? `<label class="hint" style="display:flex;gap:8px;align-items:center;margin:-4px 0 12px"><input type="checkbox" id="lg-keep" checked style="width:22px;min-height:22px">
+        Khi tạo tài khoản mới: mang ${data.accounts.length} tài khoản đang có trên máy này lên mây</label>` : ''}
+      <div class="err" id="lg-err"></div>
+      <button class="btn primary" data-action="lg-in">Đăng nhập</button>
+      <div style="height:10px"></div>
+      <button class="btn" data-action="lg-new">+ Tạo tài khoản mới</button>
+    </section>`;
+}
+function openMe(){
+  const st = { saving:'⏳ Đang lưu…', synced:'☁️ Đã lưu lên mây', offline:'⚠️ Chưa lưu được (mất mạng?) — app sẽ tự thử lại', idle:'☁️ Đã kết nối' }[sess.status];
+  openSheet(sheetHead('Tài khoản của bạn') + `
+    <div class="summary">Mã cá nhân: <b id="me-code">${esc(sess.code.slice(0, 2))}${'•'.repeat(Math.max(0, sess.code.length - 2))}</b>
+      <button class="btn sm" data-action="me-show" style="margin-left:8px">Hiện</button><br>
+      ${st}${sess.cloudAt ? '<br><span class="muted">Lần lưu cuối: ' + fmtStamp(Date.parse(sess.cloudAt)) + '</span>' : ''}${sess.err && sess.status === 'offline' ? '<br><span class="neg">' + esc(sess.err) + '</span>' : ''}</div>
+    <p class="hint">Sang máy khác: mở link app, nhập đúng mã này rồi bấm <b>Đăng nhập</b>. Dữ liệu sẽ giống hệt.</p>
+    <button class="btn" data-action="me-sync">↻ Đồng bộ ngay</button><div style="height:10px"></div>
+    <button class="btn danger" data-action="me-out" data-confirm>Đăng xuất khỏi máy này</button>
+    <p class="hint">Đăng xuất chỉ xoá dữ liệu trên máy này, dữ liệu trên mây vẫn còn.</p>`);
+}
+async function bootCloud(){
+  if (!cloudOn()) return;
+  let code = ''; try { code = localStorage.getItem(CODE_KEY) || ''; } catch(e){}
+  if (!code){ render(); return; }
+  sess.code = code; sess.hash = await hashCode(code); sess.status = 'saving';
+  render();                                  // hiện ngay bản đã lưu trên máy, rồi cập nhật từ mây
+  await pullLatest(true);
 }
 
 // ---------- Cửa sổ trượt ----------
@@ -1235,6 +1368,12 @@ document.addEventListener('click', e => {
   const act = el.dataset.action, v = el.dataset.v, id = el.dataset.id;
   switch (act){
     case 'close': closeSheet(); break;
+    case 'lg-in': startSession(document.getElementById('lg-code').value, 'login'); break;
+    case 'lg-new': startSession(document.getElementById('lg-code').value, 'create'); break;
+    case 'me': openMe(); break;
+    case 'me-show': document.getElementById('me-code').textContent = sess.code; el.remove(); break;
+    case 'me-sync': closeSheet(); pullLatest(false).then(() => toast(sess.status === 'synced' ? 'Đã đồng bộ' : 'Chưa kết nối được máy chủ')); break;
+    case 'me-out': logout('Đã đăng xuất khỏi máy này'); break;
     case 'filter': ui.filter = v; render(); break;
     case 'view': ui.view = v; render(); scrollTo(0, 0); break;
     case 'theme': applyTheme(THEMES[(THEMES.indexOf(getTheme()) + 1) % 3]); render(); break;
@@ -1316,12 +1455,20 @@ document.addEventListener('change', e => {
   if (ui.pay && t.id === 'p-acc'){ keepPayInputs(); ui.pay.accId = t.value; renderPayForm(); }
   if (ui.form && t.id === 'f-phase') document.getElementById('f-fdate-wrap').hidden = t.value !== 'F';
 });
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && !document.getElementById('sheet').hidden) closeSheet(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !document.getElementById('sheet').hidden) closeSheet();
+  if (e.key === 'Enter' && e.target.id === 'lg-code') startSession(e.target.value, 'login');
+});
 // Tự cập nhật khi sang ngày giao dịch mới hoặc khi mở lại app trên điện thoại
-setInterval(() => { if (!document.hidden) render(); }, 30000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) render(); });
+// Không vẽ lại khi đang gõ ở màn đăng nhập (tránh mất chữ đang nhập)
+const typingLogin = () => document.activeElement && document.activeElement.id === 'lg-code';
+setInterval(() => { if (!document.hidden && !typingLogin()) render(); }, 30000);
+// Mở lại app / quay lại tab: lấy bản mới nhất trên mây (trường hợp vừa sửa ở máy khác)
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !typingLogin()){ render(); pullLatest(false); } });
+setInterval(() => { if (!document.hidden && sess.hash && document.getElementById('sheet').hidden) pullLatest(false); }, 60000);
+window.addEventListener('online', () => { if (sess.dirty) pushNow(); else pullLatest(false); });
 
-render();
+if (cloudOn()) bootCloud(); else render();
 </script>
 </body>
 </html>
