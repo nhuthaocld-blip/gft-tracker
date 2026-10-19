@@ -28,10 +28,9 @@ const CONFIG = {
   PAYOUT_WARN_DAYS: 2,  // Payout chờ quá số ngày này thì cảnh báo vàng
   DAY_RESET_TZ: "America/New_York", // Múi giờ tính ngày giao dịch
   DAY_RESET_HOUR: 17,   // Giờ sang ngày mới theo New York (17 = 5PM)
-  ACCOUNT_PRICES: { 5000: 17, 8000: 56, 15000: 98, 25000: 158, 50000: 308, 100000: 478, 150000: 758 }, // Giá gốc ($) để tự điền chi phí
-  // Giá mua theo lô (combo). Ví dụ 5k: mua 3 tài khoản cùng lúc = $59.
-  // Thêm size khác theo dạng  size: { qty: số tài khoản, price: giá cả combo }
-  COMBO_PRICES: { 5000: { qty: 3, price: 59 } }
+  SIZES: [5000, 8000, 15000, 25000, 50000, 100000, 150000], // Các size tài khoản để chọn khi thêm
+  DIR_MAX_STREAK: 2     // Chống đánh 1 chiều: cùng hướng (Buy/Sell) tối đa bao nhiêu ngày liền.
+                        //   Đạt mức này thì lệnh tiếp theo BẮT BUỘC đổi hướng. 1 ngày thì chỉ nhắc nên đổi.
 };
 </script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -102,6 +101,30 @@ header h1{font-size:22px;margin:0 0 2px}
 .st-sel{display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:4px}
 .eq svg{width:100%;height:auto;display:block}
 .note{font-size:14px;color:var(--muted);margin-top:8px}
+.tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;background:var(--chip);border-radius:14px;padding:4px;margin-bottom:12px}
+.tab{min-height:44px;border:0;border-radius:10px;background:transparent;color:var(--muted);font:inherit;font-size:15px;font-weight:600;cursor:pointer;padding:0 4px}
+.tab.on{background:var(--card);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+details.more{border:1px solid var(--line);border-radius:12px;padding:0 12px;margin-bottom:14px}
+details.more summary{min-height:48px;display:flex;align-items:center;cursor:pointer;font-weight:600;font-size:15px}
+details.more[open]{padding-bottom:4px}
+.dirline{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px;color:var(--muted);margin-top:4px}
+.dirline .cnt b.L{color:var(--green)} .dirline .cnt b.S{color:var(--red)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:13px;color:var(--muted);margin:-4px 0 12px}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:4px;vertical-align:-1px;margin-right:4px}
+.cal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px}
+.cal-head b{font-size:17px}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.cal .hd{text-align:center;font-size:13px;color:var(--muted);font-weight:600;padding-bottom:2px}
+.cal .d{min-height:58px;border-radius:10px;background:var(--bg);padding:4px;font-size:13px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.cal .d.out{opacity:.3}
+.cal .d.today{outline:2px solid var(--accent)}
+.cal .ev{font-size:11px;font-weight:700;border-radius:5px;padding:1px 3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ev.paid{background:var(--green);color:#fff}
+.ev.pending{background:var(--yellow-bg);color:var(--yellow)}
+.ev.elig{color:var(--accent);border:1px dashed var(--accent)}
+.pay-acc{border-left:6px solid var(--green)}
+.pay-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);font-size:15px}
+.pay-row .r{display:flex;gap:6px;flex:none}
 .daybar{color:var(--muted);font-size:15px}
 
 .banner{border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:15px}
@@ -241,14 +264,15 @@ h3{font-size:16px;margin:22px 0 4px}
 <script>
 'use strict';
 const STORE_KEY = 'gft-tracker-v1';
-// Bảng 10 màu nhận diện tài khoản
-const COLORS = ['#1f5eff','#e5484d','#12a150','#f5a524','#8e4ec6','#0aa5c6','#e93d82','#8a6240','#f76b15','#5b6472'];
+// Màu tài khoản theo hướng lệnh gần nhất (chống đánh 1 chiều)
+const DIR_COLORS = { none:'#64748b', L1:'#4ade80', L2:'#15803d', S1:'#f87171', S2:'#b91c1c' };
+const DIR_NAME = { L:'Buy', S:'Sell' };
 const PHASES = { P1:'Vòng 1', P2:'Vòng 2', F:'Funded' };
 const WD = ['CN','T2','T3','T4','T5','T6','T7'];
 
 let storageOk = true;
 let data = load();
-const ui = { filter:'active', rec:null, form:null, ord:null, view:'main', stAcc:'all', stPhase:'all' };
+const ui = { filter:'active', rec:null, form:null, ord:null, pay:null, view:'main', stAcc:'all', stPhase:'all', payMonth:'' };
 // Giao diện sáng/tối: auto (theo máy) -> light -> dark, nhớ trên máy này
 const THEMES = ['auto', 'light', 'dark'], THEME_ICON = { auto:'🌓', light:'☀️', dark:'🌙' };
 function getTheme(){ try { return localStorage.getItem('gft-theme') || 'auto'; } catch(e){ return 'auto'; } }
@@ -260,10 +284,12 @@ function applyTheme(t){
 applyTheme(getTheme());
 function headerButtons(){
   const t = getTheme();
-  return `<div class="hbtns">
-    <button class="hbtn ${ui.view === 'stats' ? 'on' : ''}" data-action="view" data-v="${ui.view === 'stats' ? 'main' : 'stats'}">${ui.view === 'stats' ? '← Tài khoản' : '📊 Thống kê'}</button>
-    <button class="hbtn" data-action="theme" title="Giao diện: ${t === 'auto' ? 'theo máy' : t === 'light' ? 'sáng' : 'tối'}">${THEME_ICON[t]}</button>
-  </div>`;
+  return `<div class="hbtns"><button class="hbtn" data-action="theme" title="Giao diện: ${t === 'auto' ? 'theo máy' : t === 'light' ? 'sáng' : 'tối'}">${THEME_ICON[t]}</button></div>`;
+}
+// 3 trang tách biệt: Tài khoản (chính) · Thống kê · Payout
+function topNav(){
+  return `<nav class="tabs">${[['main','🏠 Tài khoản'],['stats','📊 Thống kê'],['payout','💸 Payout']]
+    .map(([k, t]) => `<button class="tab ${ui.view === k ? 'on' : ''}" data-action="view" data-v="${k}">${t}</button>`).join('')}</nav>`;
 }
 
 // ---------- Lưu / đọc dữ liệu ----------
@@ -276,8 +302,8 @@ function load(){
 function normalize(d){
   d = (d && typeof d === 'object') ? d : {};
   const saved = d.settings || {};
-  const settings = { ...CONFIG, ...saved, ACCOUNT_PRICES:{ ...CONFIG.ACCOUNT_PRICES, ...(saved.ACCOUNT_PRICES || {}) },
-                     COMBO_PRICES:{ ...CONFIG.COMBO_PRICES, ...(saved.COMBO_PRICES || {}) } };
+  const settings = { ...CONFIG, ...saved };
+  delete settings.ACCOUNT_PRICES; delete settings.COMBO_PRICES;   // bản cũ: giá tự điền, nay nhập tay
   return {
     version: 1,
     settings,
@@ -403,6 +429,7 @@ function compute(acc, today){
 // ---------- Trang chính ----------
 function render(){
   if (ui.view === 'stats') return renderStats();
+  if (ui.view === 'payout') return renderPayout();
   const ms = now(), today = tradingDayAt(ms), closed = marketClosedAt(ms);
   const accs = data.accounts;
   const comp = new Map(accs.map(a => [a.id, compute(a, today)]));
@@ -417,7 +444,7 @@ function render(){
   h += closed
     ? `Cuối tuần, thị trường đóng · Ngày giao dịch tiếp theo: <b>${fmtDay(today)}</b>`
     : `Ngày giao dịch: <b>${fmtDay(today)}</b> · sang ngày mới lúc <b>${fmtTime(nextResetMs(ms))}</b> (giờ máy)`;
-  h += `</div></header>`;
+  h += `</div></header>` + topNav();
   if (!storageOk) h += `<div class="banner red">⚠ Không lưu được dữ liệu trên trình duyệt này (có thể đang ở chế độ ẩn danh). Dữ liệu sẽ mất khi đóng trang.</div>`;
 
   h += `<section class="overview">
@@ -448,13 +475,14 @@ function render(){
     return (ta - tb) || ((+a.order || 0) - (+b.order || 0)) || a.label.localeCompare(b.label);
   });
 
+  if (list.length && ui.filter !== 'passed' && ui.filter !== 'breached')
+    h += `<div class="legend"><span>Màu viền thẻ:</span><span><i style="background:${DIR_COLORS.L1}"></i>vừa Buy</span><span><i style="background:${DIR_COLORS.L2}"></i>quá Buy</span>
+          <span><i style="background:${DIR_COLORS.S1}"></i>vừa Sell</span><span><i style="background:${DIR_COLORS.S2}"></i>quá Sell</span><span><i style="background:${DIR_COLORS.none}"></i>chưa đánh</span></div>`;
   if (!accs.length) h += `<div class="empty">Chưa có tài khoản nào.<br>Bấm <b>+ Thêm tài khoản</b> ở dưới để bắt đầu.</div>`;
   else if (!list.length) h += `<div class="empty">Không có tài khoản nào trong mục này.</div>`;
   else h += list.map(a => card(a, comp.get(a.id), closed)).join('');
 
-  const cb = S().COMBO_PRICES[5000];
-  h += `<div class="foot"><button class="btn primary" data-action="add-account">+ Thêm tài khoản</button>
-        ${cb ? `<button class="btn" data-action="add-combo">+ Thêm lô combo ${cb.qty} tài khoản 5k (${money(cb.price)})</button>` : ''}</div>`;
+  h += `<div class="foot"><button class="btn primary" data-action="add-account">+ Thêm tài khoản</button></div>`;
   if (data.updatedAt) h += `<div class="saved-at">Dữ liệu lưu trên máy này · sửa lần cuối ${fmtStamp(data.updatedAt)}</div>`;
   document.getElementById('app').innerHTML = h;
 }
@@ -469,7 +497,7 @@ function card(a, c, closed){
   const dead = !isLive(a), s = S();
   const tagTxt = a.status === 'breached' ? 'Đã cháy · ' + PHASES[a.phase] : a.status === 'passed' ? '✓ Đã pass ' + PHASES[a.phase] : PHASES[a.phase];
   const tagCls = a.status === 'breached' ? 'tag-dead' : a.status === 'passed' ? 'tag-pass' : 'tag-' + a.phase;
-  let h = `<article class="card ${a.status === 'passed' ? 'passed' : dead ? 'dead' : (!closed && c.tradedToday ? 'done' : '')}" style="--acc:${esc(a.color)}">`;
+  let h = `<article class="card ${a.status === 'passed' ? 'passed' : dead ? 'dead' : (!closed && c.tradedToday ? 'done' : '')}" style="--acc:${dirColor(a)}">`;
   h += `<div class="c-top"><div><div class="c-name">${esc(a.label)}</div>
         <div class="c-sub">${sizeLabel(a.size)}${a.batchNo ? ' · Lô ' + a.batchNo : ''} · ${a.loginId
           ? `<button class="idbtn" data-action="copy-id" data-v="${esc(a.loginId)}" title="Bấm để sao chép ID">ID ${idHtml(a.loginId)} <span class="cp">⧉</span></button>`
@@ -501,6 +529,7 @@ function card(a, c, closed){
       ? `<span class="pill green">Đã đánh hôm nay ${signed(c.todayPnl)}</span>`
       : `<span class="pill yellow">Chưa đánh hôm nay</span>`;
     if (a.openOrder) h += orderBox(a, tradingDayAt(now()));
+    h += dirLine(a);
     h += `<div class="c-btns"><button class="btn primary" data-action="record" data-id="${a.id}">Ghi kết quả</button>
           <button class="btn" data-action="order" data-id="${a.id}">${a.openOrder ? 'Sửa lệnh' : '+ Lệnh mở'}</button>
           <button class="btn" data-action="manage" data-id="${a.id}">Quản lý</button></div>`;
@@ -510,6 +539,44 @@ function card(a, c, closed){
     h += `<div class="c-btns" style="grid-template-columns:1fr"><button class="btn" data-action="manage" data-id="${a.id}">Quản lý</button></div>`;
   }
   return h + `</article>`;
+}
+
+// ---------- Chống đánh 1 chiều (Buy/Sell liên tiếp) ----------
+// Xét các ngày đã đánh của tài khoản (trước ngày `beforeDay` nếu có), lấy chuỗi cùng hướng gần nhất
+function dirState(a, beforeDay){
+  const byDay = {};
+  data.results.filter(r => r.accountId === a.id && r.kind !== 'adjust' && r.dir && (!beforeDay || r.tradingDay < beforeDay))
+    .sort((x, y) => x.createdAt - y.createdAt).forEach(r => byDay[r.tradingDay] = r.dir);
+  const days = Object.keys(byDay).sort();
+  let dir = null, streak = 0;
+  for (let i = days.length - 1; i >= 0; i--){
+    if (!dir){ dir = byDay[days[i]]; streak = 1; }
+    else if (byDay[days[i]] === dir) streak++;
+    else break;
+  }
+  const max = Math.max(1, +S().DIR_MAX_STREAK || 2);
+  const level = !dir ? 0 : streak >= max ? 2 : 1;           // 1 = nên đổi, 2 = bắt buộc đổi
+  const counts = { L:0, S:0 }; Object.values(byDay).forEach(d => counts[d]++);
+  return { dir, streak, level, need: dir ? (dir === 'L' ? 'S' : 'L') : null, counts,
+           color: !dir ? DIR_COLORS.none : DIR_COLORS[dir + (level === 2 ? '2' : '1')] };
+}
+function dirColor(a){ return isLive(a) ? dirState(a).color : DIR_COLORS.none; }
+function dirLine(a){
+  const st = dirState(a);
+  let h = '';
+  if (st.level === 2) h += `<div class="alert red">⛔ Đã ${DIR_NAME[st.dir].toUpperCase()} ${st.streak} ngày liền → lệnh tiếp theo BẮT BUỘC <b>${DIR_NAME[st.need].toUpperCase()}</b></div>`;
+  else if (st.level === 1) h += `<div class="alert yellow">↔ Lần trước ${DIR_NAME[st.dir]} → lệnh tiếp theo nên <b>${DIR_NAME[st.need]}</b></div>`;
+  h += `<div class="dirline"><span>Chống đánh 1 chiều</span><span class="cnt">Buy <b class="L">${st.counts.L}</b> ngày · Sell <b class="S">${st.counts.S}</b> ngày</span></div>`;
+  return h;
+}
+// Cảnh báo khi chọn hướng trùng với chuỗi đang có (dùng ở màn ghi lệnh / ghi kết quả)
+function dirWarn(a, dir, day){
+  if (!dir) return '';
+  const st = dirState(a, day);
+  if (!st.dir || dir !== st.dir) return '';
+  return st.level === 2
+    ? `<div class="alert red" style="margin:0 0 12px">⛔ Sai quy tắc chống đánh 1 chiều: đã ${DIR_NAME[st.dir]} ${st.streak} ngày liền, lệnh này phải là <b>${DIR_NAME[st.need]}</b>.</div>`
+    : `<div class="alert yellow" style="margin:0 0 12px">↔ Lần trước cũng ${DIR_NAME[st.dir]}. Theo quy tắc nên đổi sang <b>${DIR_NAME[st.need]}</b>.</div>`;
 }
 
 // ---------- Trang thống kê ----------
@@ -573,7 +640,7 @@ function renderStats(){
   const st = calcStats(trades);
 
   let h = `<header><div class="hrow"><h1>Thống kê</h1>${headerButtons()}</div>
-           <div class="daybar">Tính từ các kết quả đã ghi. Lệnh "đối chiếu số dư" không tính.</div></header>`;
+           <div class="daybar">Tính từ các kết quả đã ghi. Lệnh "đối chiếu số dư" không tính.</div></header>` + topNav();
   h += `<div class="st-sel"><select id="st-acc">
           <option value="all" ${ui.stAcc === 'all' ? 'selected' : ''}>Tất cả tài khoản</option>
           <option value="live" ${ui.stAcc === 'live' ? 'selected' : ''}>Chỉ tài khoản đang chạy</option>
@@ -614,7 +681,7 @@ function renderStats(){
     h += `<section class="st-card"><h2>Theo thứ trong tuần</h2><table class="st-tbl">${head}${groupRows(by(r => dow(r.tradingDay), [[1,'Thứ 2'],[2,'Thứ 3'],[3,'Thứ 4'],[4,'Thứ 5'],[5,'Thứ 6']]))}</table></section>`;
     if (ui.stAcc === 'all' || ui.stAcc === 'live'){
       const accRows = accs.filter(a => trades.some(r => r.accountId === a.id)).sort((a, b) => (+a.order || 0) - (+b.order || 0))
-        .map(a => [`<i style="display:inline-block;width:10px;height:10px;border-radius:9px;background:${esc(a.color)}"></i> ${esc(a.label)} <span class="muted">${PHASES[a.phase]}</span>`, trades.filter(r => r.accountId === a.id)]);
+        .map(a => [`<i style="display:inline-block;width:10px;height:10px;border-radius:9px;background:${dirColor(a)}"></i> ${esc(a.label)} <span class="muted">${PHASES[a.phase]}</span>`, trades.filter(r => r.accountId === a.id)]);
       h += `<section class="st-card"><h2>Theo tài khoản</h2><table class="st-tbl">${head}${groupRows(accRows)}</table></section>`;
     }
   }
@@ -635,6 +702,132 @@ function renderStats(){
   document.getElementById('app').innerHTML = h;
 }
 
+// ---------- Trang Payout (lịch + số tiền) ----------
+function shiftMonth(ym, n){ const [y, m] = ym.split('-').map(Number); const t = new Date(Date.UTC(y, m - 1 + n, 1)); return t.toISOString().slice(0, 7); }
+// Tỷ lệ chia lợi nhuận: dính Goat Guard 1 lần thì còn 50%
+function paySplit(a){ return a && +a.goatGuardHits >= 1 ? 50 : +S().PAYOUT_SPLIT || 100; }
+// Tình trạng rút tiền của 1 tài khoản Funded
+function payInfo(a){
+  const s = S(), today = localDate(now()), c = compute(a, tradingDayAt(now()));
+  const pays = data.payouts.filter(p => p.accountId === a.id);
+  const firstDate = a.fundedDate ? addDays(a.fundedDate, +s.PAYOUT_FIRST_DAYS || 14) : '';
+  const cap = pays.length < 2 ? r2(a.size * s.PAYOUT_CAP / 100) : Infinity;   // 2 lần rút đầu có trần
+  const can = Math.max(0, Math.min(c.profit, cap));
+  const waitDays = firstDate && today < firstDate ? daysBetween(today, firstDate) : 0;
+  const needDays = Math.max(0, c.minDays - c.winDays);
+  const ok = !waitDays && !needDays && c.profit > 0;
+  return { c, pays, firstDate, cap, can, waitDays, needDays, ok, split: paySplit(a) };
+}
+function renderPayout(){
+  const today = localDate(now());
+  const funded = data.accounts.filter(a => isLive(a) && a.phase === 'F').sort((x, y) => (+x.order || 0) - (+y.order || 0));
+  const paid = data.payouts.filter(p => p.status === 'paid'), pending = data.payouts.filter(p => p.status !== 'paid');
+  const sum = l => l.reduce((x, p) => x + (+(p.received ?? p.amount) || 0), 0);
+  const cost = data.accounts.reduce((x, a) => x + (+a.cost || 0), 0);
+
+  let h = `<header><div class="hrow"><h1>Payout</h1>${headerButtons()}</div>
+           <div class="daybar">Lịch rút tiền và số tiền payout của các tài khoản Funded.</div></header>` + topNav();
+  h += `<section class="st-card"><div class="kpis">
+    ${kpi('Đã về', money(sum(paid)), `${paid.length} lần`, 'pos')}
+    ${kpi('Đang chờ', money(sum(pending)), `${pending.length} lần`, pending.length ? '' : 'muted')}
+    ${kpi('Lời/lỗ sau vốn', signed(sum(paid) - cost), `vốn đã bỏ ra ${money(cost)}`, sum(paid) - cost >= 0 ? 'pos' : 'neg')}
+  </div></section>`;
+
+  // Tài khoản Funded: khi nào rút được, rút được bao nhiêu
+  h += `<section class="st-card"><h2>Tài khoản Funded</h2>`;
+  if (!funded.length) h += `<div class="note">Chưa có tài khoản Funded nào. Khi pass Vòng 2, tài khoản real sẽ hiện ở đây.</div>`;
+  for (const a of funded){
+    const pi = payInfo(a);
+    h += `<div class="pay-row" style="align-items:flex-start"><div>
+        <b>${esc(a.label)}</b> <span class="muted">${a.loginId ? 'ID …' + esc(a.login4) : ''}</span><br>
+        Lãi hiện tại <b class="${pi.c.profit >= 0 ? 'pos' : 'neg'}">${signed(pi.c.profit)}</b> · Ngày lãi ${pi.c.winDays}/${pi.c.minDays}<br>
+        <span class="muted">${pi.firstDate ? `Rút lần đầu từ ${fmtDay(pi.firstDate)}${pi.waitDays ? ` (còn ${pi.waitDays} ngày)` : ''} · ` : ''}${isFinite(pi.cap) ? `trần ${money(pi.cap)}/lần` : 'không giới hạn'} · chia ${pi.split}%</span><br>
+        ${pi.ok ? `<span class="pill green">✓ Đủ điều kiện · rút được ≈ ${money(pi.can)}</span>`
+                : `<span class="pill yellow">Chưa đủ: ${[pi.waitDays ? `chờ ${pi.waitDays} ngày` : '', pi.needDays ? `thiếu ${pi.needDays} ngày lãi` : '', pi.c.profit <= 0 ? 'chưa có lãi' : ''].filter(Boolean).join(', ')}</span>`}
+      </div><div class="r"><button class="btn sm" data-action="pay-new" data-id="${a.id}">+ Ghi</button></div></div>`;
+  }
+  h += `</section>`;
+
+  // Lịch tháng
+  const ym = ui.payMonth || today.slice(0, 7);
+  const ev = {};
+  const add = (d, cls, txt) => { if (d) (ev[d] = ev[d] || []).push({ cls, txt }); };
+  for (const p of data.payouts){
+    const a = accById(p.accountId), nm = a ? a.label.replace(/^GFT\s*/, '') : '?';
+    const amt = money(p.received ?? p.amount);
+    if (p.status === 'paid') add(p.paidDate || p.requestDate, 'paid', `${amt} ${nm}`);
+    else add(p.requestDate, 'pending', `${amt} ${nm}`);
+  }
+  for (const a of funded){ const pi = payInfo(a); if (pi.firstDate && !pi.pays.length) add(pi.firstDate, 'elig', `Rút được ${a.label.replace(/^GFT\s*/, '')}`); }
+  const [yy, mm] = ym.split('-').map(Number);
+  const first = `${ym}-01`, startOffset = (dow(first) + 6) % 7;           // lịch bắt đầu từ thứ 2
+  const daysIn = new Date(Date.UTC(yy, mm, 0)).getUTCDate();
+  h += `<section class="st-card"><div class="cal-head">
+      <button class="btn sm" data-action="pay-month" data-v="-1">‹</button><b>Tháng ${mm}/${yy}</b><button class="btn sm" data-action="pay-month" data-v="1">›</button></div>
+    <div class="cal">${['T2','T3','T4','T5','T6','T7','CN'].map(d => `<div class="hd">${d}</div>`).join('')}`;
+  for (let i = 0; i < 42; i++){
+    const d = addDays(first, i - startOffset), inMonth = d.slice(0, 7) === ym;
+    if (i >= 35 && !inMonth && i - startOffset >= daysIn) break;
+    h += `<div class="d ${inMonth ? '' : 'out'} ${d === today ? 'today' : ''}"><span>${+d.slice(8)}</span>${(ev[d] || []).map(e => `<span class="ev ${e.cls}">${esc(e.txt)}</span>`).join('')}</div>`;
+  }
+  h += `</div><div class="legend" style="margin:10px 0 0"><span><i style="background:var(--green)"></i>đã về</span><span><i style="background:var(--yellow-bg);border:1px solid var(--yellow)"></i>đang chờ</span><span><i style="border:1px dashed var(--accent)"></i>ngày được rút lần đầu</span></div></section>`;
+
+  // Lịch sử payout
+  const hist = data.payouts.slice().sort((x, y) => (y.requestDate || '').localeCompare(x.requestDate || '') || (y.createdAt || 0) - (x.createdAt || 0));
+  h += `<section class="st-card"><h2>Lịch sử payout</h2>`;
+  if (!hist.length) h += `<div class="note">Chưa có payout nào.</div>`;
+  for (const p of hist){
+    const a = accById(p.accountId), late = p.status !== 'paid' && daysBetween(p.requestDate, today) > (+S().PAYOUT_WARN_DAYS || 2);
+    h += `<div class="pay-row"><div>
+        <b>${a ? esc(a.label) : 'Tài khoản đã xoá'}</b> · ${fmtDay(p.requestDate)}<br>
+        Rút <b>${money(p.amount)}</b> · nhận <b class="pos">${money(p.received ?? p.amount)}</b><br>
+        ${p.status === 'paid' ? `<span class="pill green">Đã về${p.paidDate ? ' ' + fmtDay(p.paidDate) : ''}</span>`
+          : `<span class="pill ${late ? 'red' : 'yellow'}">Đang chờ ${daysBetween(p.requestDate, today)} ngày${late ? ' — quá hạn' : ''}</span>`}
+      </div><div class="r">${p.status !== 'paid' ? `<button class="btn sm" data-action="pay-paid" data-id="${p.id}">Đã về</button>` : ''}
+        <button class="btn sm danger" data-action="pay-del" data-id="${p.id}" data-confirm>Xoá</button></div></div>`;
+  }
+  h += `</section>`;
+  h += `<div class="foot"><button class="btn primary" data-action="pay-new">+ Ghi payout</button></div>`;
+  document.getElementById('app').innerHTML = h;
+}
+function openPayoutForm(accId){
+  const funded = data.accounts.filter(a => a.phase === 'F' && a.status !== 'passed');
+  if (!funded.length){ toast('Chưa có tài khoản Funded nào để ghi payout.'); return; }
+  ui.pay = { accId: accId || funded[0].id, amount:'', received:'', date:localDate(now()), status:'pending', recvTouched:false };
+  renderPayForm();
+}
+function keepPayInputs(){
+  const g = id => document.getElementById(id); if (!g('p-amt')) return;
+  ui.pay.amount = g('p-amt').value; ui.pay.received = g('p-recv').value; ui.pay.date = g('p-date').value;
+}
+function renderPayForm(){
+  const r = ui.pay, funded = data.accounts.filter(a => a.phase === 'F' && a.status !== 'passed'), a = accById(r.accId), pi = payInfo(a);
+  let h = sheetHead('Ghi payout');
+  h += `<div class="field"><label for="p-acc">Tài khoản</label><select id="p-acc">${funded.map(x => `<option value="${x.id}" ${x.id === r.accId ? 'selected' : ''}>${esc(x.label)}${x.loginId ? ' · …' + esc(x.login4) : ''}</option>`).join('')}</select>
+        <div class="hint">Lãi hiện tại ${signed(pi.c.profit)} · ${isFinite(pi.cap) ? `trần lần này ${money(pi.cap)}` : 'không giới hạn'} · chia ${pi.split}%</div></div>`;
+  h += `<div class="two">
+      <div class="field"><label for="p-amt">Số tiền rút ($)</label><input id="p-amt" type="number" inputmode="decimal" min="0" step="0.01" value="${esc(r.amount)}" placeholder="${pi.can ? r2(pi.can) : ''}"></div>
+      <div class="field"><label for="p-recv">Thực nhận ($)</label><input id="p-recv" type="number" inputmode="decimal" min="0" step="0.01" value="${esc(r.received)}"></div>
+    </div>`;
+  h += `<div class="field"><label for="p-date">Ngày yêu cầu rút</label><input id="p-date" type="date" value="${esc(r.date)}"></div>`;
+  h += `<div class="field"><div class="lbl">Trạng thái</div><div class="seg">
+      <button class="${r.status === 'pending' ? 'on r' : ''}" style="${r.status === 'pending' ? 'background:var(--yellow);border-color:var(--yellow);color:#111' : ''}" data-action="pay-st" data-v="pending">Đang chờ</button>
+      <button class="g ${r.status === 'paid' ? 'on' : ''}" data-action="pay-st" data-v="paid">Đã về</button></div></div>`;
+  h += `<div class="hint" style="margin-bottom:12px">Số tiền rút sẽ được trừ khỏi số dư tài khoản, ngày lãi kỳ mới đếm lại từ sau ngày yêu cầu.</div>`;
+  h += `<div class="err" id="p-err"></div><button class="btn primary" data-action="pay-save">Lưu payout</button>`;
+  openSheet(h);
+}
+function savePayout(){
+  keepPayInputs();
+  const r = ui.pay, amount = r2(r.amount), received = r.received === '' ? r2(amount * paySplit(accById(r.accId)) / 100) : r2(r.received);
+  if (!(amount > 0)){ document.getElementById('p-err').textContent = 'Nhập số tiền rút.'; return; }
+  if (!r.date){ document.getElementById('p-err').textContent = 'Chọn ngày yêu cầu rút.'; return; }
+  data.payouts.push({ id:uid(), accountId:r.accId, amount, received, requestDate:r.date, status:r.status,
+                      paidDate: r.status === 'paid' ? r.date : '', createdAt:Date.now() });
+  closeSheet(); save();
+  toast(`Đã ghi payout ${money(received)}`);
+}
+
 // ---------- Cửa sổ trượt ----------
 function openSheet(html){
   document.getElementById('sheetBody').innerHTML = html;
@@ -644,7 +837,7 @@ function openSheet(html){
 function closeSheet(){
   document.getElementById('sheet').hidden = true;
   document.body.style.overflow = '';
-  ui.rec = null; ui.form = null; ui.ord = null;
+  ui.rec = null; ui.form = null; ui.ord = null; ui.pay = null;
 }
 function sheetHead(title){ return `<div class="sh-head"><h2>${title}</h2><button class="x" data-action="close" aria-label="Đóng">✕</button></div>`; }
 let toastTimer;
@@ -667,7 +860,7 @@ function openRecord(id){
 function renderRecord(){
   const r = ui.rec, a = accById(r.id);
   let h = sheetHead('Ghi kết quả');
-  h += `<div class="idblock" style="--acc:${esc(a.color)};--on:${textOn(a.color)}">
+  h += `<div class="idblock" style="--acc:${dirColor(a)};--on:${textOn(dirColor(a))}">
           <div class="l1">${esc(a.label)}</div>
           <div class="l2">${a.loginId ? 'ID …' + esc(a.login4) : 'chưa nhập ID'} · ${PHASES[a.phase]}</div>
         </div>`;
@@ -675,9 +868,10 @@ function renderRecord(){
         <input type="date" id="r-day" value="${r.day}" max="${tradingDayAt(now())}">
         <div class="hint">${fmtDay(r.day)}${r.day === tradingDayAt(now()) ? ' — hôm nay' : ''}</div></div>`;
   h += `<div class="field"><div class="lbl">Hướng lệnh</div><div class="seg">
-          <button class="g ${r.dir === 'L' ? 'on' : ''}" data-action="rec-dir" data-v="L">▲ Long</button>
-          <button class="r ${r.dir === 'S' ? 'on' : ''}" data-action="rec-dir" data-v="S">▼ Short</button></div>
+          <button class="g ${r.dir === 'L' ? 'on' : ''}" data-action="rec-dir" data-v="L">▲ Buy (Long)</button>
+          <button class="r ${r.dir === 'S' ? 'on' : ''}" data-action="rec-dir" data-v="S">▼ Sell (Short)</button></div>
         ${r.dir && !r.dirTouched ? '<div class="hint">Tự chọn theo hướng đã ghi trước đó trong ngày</div>' : ''}</div>`;
+  h += dirWarn(a, r.dir, r.day);
   h += `<div class="field"><div class="lbl">Kết quả</div><div class="seg">
           <button class="g ${r.out === 'W' ? 'on' : ''}" data-action="rec-out" data-v="W">Thắng</button>
           <button class="r ${r.out === 'L' ? 'on' : ''}" data-action="rec-out" data-v="L">Thua</button></div></div>`;
@@ -756,7 +950,7 @@ function ordersOverview(active, today){
   if (!list.length) return '';
   const dirs = new Set(list.map(a => ORDER_TYPES[a.openOrder.type].dir));
   return `<div class="ov-orders">
-    ${list.map(a => `<div class="oi"><i style="background:${esc(a.color)}"></i><span><b>${esc(a.label)}</b> · ${orderLabel(a.openOrder)}${orderDetail(a.openOrder) ? ' · ' + esc(orderDetail(a.openOrder)) : ''}</span></div>`).join('')}
+    ${list.map(a => `<div class="oi"><i style="background:${dirColor(a)}"></i><span><b>${esc(a.label)}</b> · ${orderLabel(a.openOrder)}${orderDetail(a.openOrder) ? ' · ' + esc(orderDetail(a.openOrder)) : ''}</span></div>`).join('')}
     ${dirs.size > 1 ? `<div class="alert red" style="margin-top:2px">⚠ Đối lệnh (hedging): đang có cả lệnh Buy và Sell</div>` : ''}
   </div>`;
 }
@@ -771,7 +965,7 @@ function keepOrderInputs(){
 function renderOrder(){
   const r = ui.ord, a = accById(r.id), o = a.openOrder, today = tradingDayAt(now());
   let h = sheetHead(o ? 'Lệnh đang mở' : 'Ghi lệnh mở');
-  h += `<div class="idblock" style="--acc:${esc(a.color)};--on:${textOn(a.color)}"><div class="l1">${esc(a.label)}</div>
+  h += `<div class="idblock" style="--acc:${dirColor(a)};--on:${textOn(dirColor(a))}"><div class="l1">${esc(a.label)}</div>
         <div class="l2">${a.loginId ? 'ID …' + esc(a.login4) : 'chưa nhập ID'} · ${PHASES[a.phase]}</div></div>`;
   if (o){
     h += `<div class="summary">Hiện tại: <b>${orderLabel(o)}</b>${orderDetail(o) ? '<br>' + esc(orderDetail(o)) : ''}</div>`;
@@ -795,7 +989,9 @@ function renderOrder(){
     if (!o && data.results.some(x => x.accountId === a.id && x.kind !== 'adjust' && x.tradingDay === today))
       h += `<div class="alert yellow" style="margin:0 0 12px">⚠ Tài khoản này đã đánh 1 lệnh hôm nay.</div>`;
   }
-  h += `<button class="btn primary" data-action="ord-save" ${r.type ? '' : 'disabled'}>${o ? 'Lưu thay đổi' : 'Lưu lệnh'}</button>`;
+  const dw = r.type ? dirWarn(a, ORDER_TYPES[r.type].dir, today) : '';
+  h += dw;
+  h += `<button class="btn primary" data-action="ord-save" ${r.type ? '' : 'disabled'} ${dw.includes('⛔') ? 'data-confirm' : ''}>${o ? 'Lưu thay đổi' : 'Lưu lệnh'}${dw.includes('⛔') ? ' (sai quy tắc)' : ''}</button>`;
   openSheet(h);
 }
 function saveOrder(){
@@ -815,7 +1011,7 @@ const NEXT = { P1:'P2', P2:'F' };
 const NEXT_NAME = { P1:'Vòng 2', P2:'Funded (tài khoản real)' };
 function statusBlock(a){
   const c = compute(a, tradingDayAt(now()));
-  let h = `<div class="idblock" style="--acc:${esc(a.color)};--on:${textOn(a.color)}">
+  let h = `<div class="idblock" style="--acc:${dirColor(a)};--on:${textOn(dirColor(a))}">
              <div class="l1">${esc(a.label)}</div>
              <div class="l2">${a.loginId ? 'ID …' + esc(a.login4) : 'chưa nhập ID'} · ${a.status === 'breached' ? 'Đã cháy (' + PHASES[a.phase] + ')' : a.status === 'passed' ? 'Đã pass ' + PHASES[a.phase] : PHASES[a.phase]} · số dư ${money(c.balance)}</div>
            </div>`;
@@ -853,7 +1049,7 @@ function passAccount(id){
   if (err){ document.getElementById('f-pass-err').textContent = err; return; }
   // GFT đóng tài khoản cũ và gửi tài khoản mới: cũ -> Hoàn thành, tạo tài khoản mới hoàn toàn
   const today = localDate(now()), to = NEXT[a.phase];
-  const nx = { id:uid(), label:a.label, loginId:nid, login4:last4(nid), color:a.color, size:a.size,
+  const nx = { id:uid(), label:a.label, loginId:nid, login4:last4(nid), size:a.size,
                cost:0,                       // tiền mua đã tính ở tài khoản Vòng 1, không cộng lại
                purchaseDate:a.purchaseDate, order:a.order, phase:to, status:'active',
                fundedDate: to === 'F' ? today : '', goatGuardHits:0, prevId:a.id, batchNo:a.batchNo || 0 };
@@ -880,7 +1076,7 @@ function setBreached(id, on){
 // Sau khi lưu mà số dư chạm/thủng sàn: hỏi đánh dấu cháy luôn
 function askBreach(a, c){
   openSheet(sheetHead('Tài khoản chạm sàn') +
-    `<div class="idblock" style="--acc:${esc(a.color)};--on:${textOn(a.color)}"><div class="l1">${esc(a.label)}</div>
+    `<div class="idblock" style="--acc:${dirColor(a)};--on:${textOn(dirColor(a))}"><div class="l1">${esc(a.label)}</div>
        <div class="l2">${a.loginId ? 'ID …' + esc(a.login4) : ''} · số dư ${money(c.balance)} ≤ sàn ${money(c.floor)}</div></div>
      <p>Số dư đã chạm sàn sụt giảm tối đa (Max drawdown). Đánh dấu cháy luôn?</p>
      <button class="btn danger" data-action="acc-breach" data-id="${a.id}" data-confirm>🔥 Đánh dấu cháy</button>
@@ -890,116 +1086,94 @@ function askBreach(a, c){
 // ---------- Thêm / sửa tài khoản ----------
 function openAccountForm(id){
   const a = id ? accById(id) : null;
-  const usedBy = {};
-  data.accounts.filter(x => isLive(x) && x.id !== id).forEach(x => usedBy[x.color] = x.label);
-  const maxOrder = data.accounts.reduce((m, x) => Math.max(m, +x.order || 0), 0);
-  const v = a || { label:'', loginId:'', size:5000, cost:S().ACCOUNT_PRICES[5000] ?? '',
-                   purchaseDate:localDate(now()), phase:'P1', fundedDate:'', order:maxOrder + 1 };
-  ui.form = { id, color: a ? a.color : (COLORS.find(c => !usedBy[c]) || COLORS[0]), usedBy, costTouched: !!a, labelTouched: !!a };
-  const sizes = Object.keys(S().ACCOUNT_PRICES).map(Number).sort((x, y) => x - y);
-
+  ui.form = { id };
   let h = sheetHead(a ? 'Quản lý tài khoản' : 'Thêm tài khoản');
-  if (a) h += statusBlock(a);
   if (a){
-    h += `<h3>Thông tin</h3><div class="field"><label for="f-login">ID tài khoản (số login MT5)</label>
-          <input id="f-login" value="${esc(v.loginId)}" inputmode="numeric" placeholder="Dán ID vào đây" autocomplete="off">
-          <div class="hint" id="f-login-hint"></div></div>`;
-  } else {
-    h += `<div class="field"><label for="f-login">ID tài khoản (số login MT5)</label>
-          <textarea id="f-login" inputmode="numeric" placeholder="Dán 1 hoặc nhiều ID, mỗi ID 1 dòng&#10;Ví dụ:&#10;31004417&#10;31005520" autocomplete="off"></textarea>
-          <button class="btn sm" style="margin-top:8px" data-action="paste-ids">📋 Dán từ bộ nhớ</button>
-          <div class="hint" id="f-login-hint">Dán nhiều ID cùng lúc thì app tạo nhiều tài khoản, tự đặt tên và màu. Chỉ dán số login, <b>không dán mật khẩu</b>.</div>
-          <div id="f-preview"></div></div>`;
-  }
-  h += `<div class="field" id="f-label-wrap"><label for="f-label">Tên hiển thị</label>
-        <input id="f-label" value="${esc(v.label)}" maxlength="40" placeholder="${esc(autoLabel(+v.size, 0))}"></div>`;
-  h += `<div class="field" id="f-color-wrap"><div class="lbl">Màu nhận diện</div><div class="swatches" id="f-colors">${swatches()}</div>
-        <div class="hint" id="f-color-hint"></div></div>`;
-  h += `<div class="two">
-          <div class="field"><label for="f-size">Size (vốn ban đầu)</label>
-            <select id="f-size" ${a ? 'disabled' : ''}>${sizes.map(z => `<option value="${z}" ${+v.size === z ? 'selected' : ''}>${sizeLabel(z)} ($${z.toLocaleString('en-US')})</option>`).join('')}</select></div>
-          <div class="field"><label for="f-cost" id="f-cost-lbl">Chi phí mỗi tài khoản ($)</label>
-            <input id="f-cost" type="number" inputmode="decimal" min="0" step="0.01" value="${esc(v.cost)}">
-            <div class="hint" id="f-cost-hint"></div></div>
-        </div>`;
-  h += `<div class="two">
-          <div class="field"><label for="f-pdate">Ngày mua</label><input id="f-pdate" type="date" value="${esc(v.purchaseDate)}"></div>
-          <div class="field" id="f-order-wrap"><label for="f-order">Thứ tự đánh</label><input id="f-order" type="number" inputmode="numeric" min="1" value="${esc(v.order)}"></div>
-        </div>`;
-  if (!a){
-    h += `<div class="field"><label for="f-phase">Đang ở vòng</label>
-          <select id="f-phase"><option value="P1">Vòng 1 (Phase 1)</option><option value="P2">Vòng 2 (Phase 2)</option><option value="F">Funded</option></select>
-          <div class="hint">Tài khoản mới mua thì để Vòng 1.</div></div>
-          <div class="field" id="f-fdate-wrap" hidden><label for="f-fdate">Ngày lên Funded</label><input id="f-fdate" type="date" value="${localDate(now())}"></div>`;
-  }
-  h += `<div class="err" id="f-err"></div><button class="btn primary" id="f-save" data-action="acc-save">${a ? 'Lưu thay đổi' : 'Thêm tài khoản'}</button>`;
-
-  if (a){
+    h += statusBlock(a);
+    h += `<h3>Thông tin</h3>
+      <div class="field"><label for="f-login">ID tài khoản (số login MT5)</label>
+        <input id="f-login" value="${esc(a.loginId)}" inputmode="numeric" placeholder="Dán ID vào đây" autocomplete="off">
+        <div class="hint" id="f-login-hint"></div></div>
+      <div class="field"><label for="f-label">Tên hiển thị</label><input id="f-label" value="${esc(a.label)}" maxlength="40"></div>
+      <div class="two">
+        <div class="field"><label for="f-cost">Tiền đã bỏ ra ($)</label><input id="f-cost" type="number" inputmode="decimal" min="0" step="0.01" value="${esc(a.cost)}"></div>
+        <div class="field"><label for="f-order">Thứ tự đánh</label><input id="f-order" type="number" inputmode="numeric" min="1" value="${esc(a.order)}"></div>
+      </div>
+      <div class="field"><label for="f-pdate">Ngày mua</label><input id="f-pdate" type="date" value="${esc(a.purchaseDate)}"></div>
+      <div class="err" id="f-err"></div><button class="btn primary" data-action="acc-save">Lưu thay đổi</button>`;
     const recent = data.results.filter(r => r.accountId === a.id).sort((x, y) => y.createdAt - x.createdAt).slice(0, 15);
     h += `<h3>15 kết quả gần nhất</h3>`;
-    h += recent.length ? `<div class="list">${recent.map(r => `<div class="li"><span>${fmtDay(r.tradingDay)} · ${PHASES[r.phase]} · ${r.kind === 'adjust' ? 'Đối chiếu' : (r.dir === 'L' ? 'Long' : 'Short')} ·
+    h += recent.length ? `<div class="list">${recent.map(r => `<div class="li"><span>${fmtDay(r.tradingDay)} · ${PHASES[r.phase]} · ${r.kind === 'adjust' ? 'Đối chiếu' : (r.dir === 'L' ? 'Buy' : 'Sell')} ·
            <b class="${r.pnl > 0 ? 'pos' : 'neg'}">${signed(r.pnl)}</b></span>
            <button class="btn sm danger" data-action="res-del" data-id="${r.id}" data-confirm>Xoá</button></div>`).join('')}</div>`
       : `<div class="hint">Chưa có kết quả nào.</div>`;
-    h += `<p class="hint">Payout, đối chiếu số dư và xoá tài khoản sẽ có ở lần kiểm tra sau.</p>`;
+  } else {
+    const maxOrder = data.accounts.reduce((m, x) => Math.max(m, +x.order || 0), 0);
+    const sizes = (S().SIZES || CONFIG.SIZES).map(Number);
+    h += `<div class="field"><label for="f-login">ID tài khoản (số login MT5)</label>
+          <textarea id="f-login" inputmode="numeric" placeholder="Dán 1 hoặc nhiều ID, mỗi ID 1 dòng&#10;Ví dụ:&#10;31004417&#10;31005520" autocomplete="off"></textarea>
+          <button class="btn sm" style="margin-top:8px" data-action="paste-ids">📋 Dán từ bộ nhớ</button>
+          <div class="hint" id="f-login-hint">Dán nhiều ID cùng lúc thì app tạo nhiều tài khoản cùng 1 lô. Chỉ dán số login, <b>không dán mật khẩu</b>.</div>
+          <div id="f-preview"></div></div>
+        <div class="field"><label for="f-cost" id="f-cost-lbl">Số tiền đã bỏ ra cho lô này ($)</label>
+          <input id="f-cost" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Nhập số tiền thật đã trả, ví dụ 59">
+          <div class="hint" id="f-cost-hint"></div></div>
+        <details class="more"><summary>Tuỳ chọn khác (size, vòng, ngày mua, tên)</summary>
+          <div class="two">
+            <div class="field"><label for="f-size">Size</label>
+              <select id="f-size">${sizes.map(z => `<option value="${z}" ${z === 5000 ? 'selected' : ''}>${sizeLabel(z)} ($${z.toLocaleString('en-US')})</option>`).join('')}</select></div>
+            <div class="field"><label for="f-phase">Đang ở vòng</label>
+              <select id="f-phase"><option value="P1">Vòng 1</option><option value="P2">Vòng 2</option><option value="F">Funded</option></select></div>
+          </div>
+          <div class="field" id="f-fdate-wrap" hidden><label for="f-fdate">Ngày lên Funded</label><input id="f-fdate" type="date" value="${localDate(now())}"></div>
+          <div class="two">
+            <div class="field"><label for="f-pdate">Ngày mua</label><input id="f-pdate" type="date" value="${localDate(now())}"></div>
+            <div class="field" id="f-order-wrap"><label for="f-order">Thứ tự đánh</label><input id="f-order" type="number" inputmode="numeric" min="1" value="${maxOrder + 1}"></div>
+          </div>
+          <div class="field" id="f-label-wrap"><label for="f-label">Tên hiển thị</label><input id="f-label" maxlength="40" placeholder="${esc(autoLabel(5000, 0))}"></div>
+        </details>
+        <div class="err" id="f-err"></div><button class="btn primary" id="f-save" data-action="acc-save">Thêm tài khoản</button>`;
   }
   openSheet(h);
   updateFormHints();
 }
 function autoLabel(size, i){ return `GFT ${sizeLabel(size)} #${data.accounts.length + 1 + i}`; }
-function swatches(){
-  const f = ui.form;
-  return COLORS.map(c => `<button class="sw ${f.color === c ? 'on' : ''} ${f.usedBy[c] ? 'used' : ''}" style="background:${c}" data-action="acc-color" data-v="${c}" aria-label="Màu ${c}"></button>`).join('');
-}
-// Màu cho nhiều tài khoản: ưu tiên màu chưa ai dùng, hết thì xoay vòng bảng 10 màu
-function pickColors(n){
-  const f = ui.form, free = COLORS.filter(c => !f.usedBy[c]);
-  const start = data.accounts.filter(isLive).length;
-  return Array.from({ length:n }, (_, i) => i < free.length ? free[i] : COLORS[(start + i) % COLORS.length]);
-}
 // Danh sách tài khoản sẽ tạo từ ô dán ID (chế độ thêm)
 function plannedAccounts(){
-  const f = ui.form, g = id => document.getElementById(id);
+  const g = id => document.getElementById(id);
   const ids = parseIds(g('f-login').value);
   const size = +g('f-size').value;
   const fresh = ids.filter(x => !data.accounts.some(a => a.loginId === x));
-  const colors = fresh.length > 1 ? pickColors(fresh.length) : [f.color];
   let k = 0;
   return ids.map(x => {
     const exists = data.accounts.find(a => a.loginId === x);
     if (exists) return { loginId:x, skip:`đã có (${exists.label}), bỏ qua` };
     const i = k++;
-    return { loginId:x, color:colors[i], label: fresh.length > 1 ? autoLabel(size, i) : (g('f-label').value.trim() || autoLabel(size, 0)) };
+    return { loginId:x, label: fresh.length > 1 ? autoLabel(size, i) : (g('f-label').value.trim() || autoLabel(size, 0)) };
   });
 }
 function updateFormHints(){
   const f = ui.form; if (!f) return;
   const g = id => document.getElementById(id);
   const raw = g('f-login').value;
-
   if (!f.id){
-    const plan = plannedAccounts(), fresh = plan.filter(p => !p.skip), multi = fresh.length > 1;
+    const plan = plannedAccounts(), fresh = plan.filter(p => !p.skip), n = fresh.length, multi = n > 1;
     g('f-label-wrap').hidden = multi;
-    g('f-color-wrap').hidden = multi;
     g('f-order-wrap').hidden = multi;
     // Trùng 4 số cuối thì bước xác nhận không phân biệt được
     const taken = {};
     data.accounts.filter(a => isLive(a) && a.login4).forEach(a => taken[a.login4] = a.label);
     const seen = {};
     g('f-preview').innerHTML = plan.length ? `<div class="list">${plan.map(p => {
-      if (p.skip) return `<div class="pv skip"><i style="background:var(--line)"></i><span>ID ${idHtml(p.loginId)} — ${esc(p.skip)}</span></div>`;
+      if (p.skip) return `<div class="pv skip"><span>ID ${idHtml(p.loginId)} — ${esc(p.skip)}</span></div>`;
       const l4 = last4(p.loginId), clash = taken[l4] || seen[l4]; seen[l4] = p.label;
-      return `<div class="pv"><i style="background:${p.color}"></i><span><b>${esc(p.label)}</b> · ID ${idHtml(p.loginId)}
+      return `<div class="pv"><span><b>${esc(p.label)}</b> · ID ${idHtml(p.loginId)}
               ${clash ? `<span class="w"> · trùng 4 số cuối với ${esc(clash)}</span>` : ''}</span></div>`;
     }).join('')}</div>` : (raw.trim() ? `<div class="hint warn">Không thấy ID hợp lệ. ID phải là số login, ít nhất 4 chữ số.</div>` : '');
-    g('f-save').textContent = multi ? `Thêm ${fresh.length} tài khoản` : 'Thêm tài khoản';
-    // Mua nhiều tài khoản 1 lần: nhập TỔNG tiền cả lô, app chia đều cho từng tài khoản
-    const n = fresh.length, lp = lotPrice(+g('f-size').value, n);
-    if (!f.costTouched) g('f-cost').value = multi ? lp.total : (S().ACCOUNT_PRICES[+g('f-size').value] ?? 0);
-    g('f-cost-lbl').textContent = multi ? `Tổng tiền cả lô ${n} tài khoản ($)` : 'Chi phí mỗi tài khoản ($)';
+    g('f-save').textContent = multi ? `Thêm ${n} tài khoản` : 'Thêm tài khoản';
+    g('f-cost-lbl').textContent = multi ? `Số tiền đã bỏ ra cho lô ${n} tài khoản ($)` : 'Số tiền đã bỏ ra ($)';
     const total = +g('f-cost').value || 0;
-    const comboTxt = multi && lp.combos ? `Giá combo: ${lp.combos} × combo ${lp.combo.qty} TK ${money(lp.combo.price)}${lp.singles ? ` + ${lp.singles} lẻ × ${money(lp.single)}` : ''}. ` : '';
-    g('f-cost-hint').textContent = multi ? `${comboTxt}Chia đều: mỗi tài khoản ≈ ${money(total / n)}` : '';
+    g('f-cost-hint').textContent = multi && total ? `Chia đều: mỗi tài khoản ≈ ${money(total / n)}` : '';
   } else {
     const id = cleanId(raw);
     const dup = id && data.accounts.find(x => x.id !== f.id && isLive(x) && x.login4 === last4(id));
@@ -1008,16 +1182,6 @@ function updateFormHints(){
                          : 'Dùng 4 số cuối để xác nhận khi ghi kết quả, chống bấm nhầm tài khoản.';
     lh.className = 'hint' + (dup ? ' warn' : '');
   }
-
-  const ch = g('f-color-hint');
-  ch.textContent = f.usedBy[f.color] ? `Màu này đang dùng cho "${f.usedBy[f.color]}". Nên chọn màu khác để dễ phân biệt.` : 'Màu có chấm nhỏ ở góc là đã có tài khoản dùng.';
-  ch.className = 'hint' + (f.usedBy[f.color] ? ' warn' : '');
-}
-function lotPrice(size, n){
-  const single = +(S().ACCOUNT_PRICES[size] ?? 0), combo = S().COMBO_PRICES[size];
-  if (!combo || !(combo.qty > 1) || n < combo.qty) return { total:r2(single * n), combos:0, singles:n, combo };
-  const combos = Math.floor(n / combo.qty), singles = n - combos * combo.qty;
-  return { total:r2(combos * combo.price + singles * single), combos, singles, combo, single };
 }
 // Chia tổng tiền cho n tài khoản, cộng lại đúng bằng tổng (tính theo cent)
 function splitCost(total, n){
@@ -1027,9 +1191,7 @@ function splitCost(total, n){
 function saveAccount(){
   const f = ui.form, g = id => document.getElementById(id);
   const cost = g('f-cost').value === '' ? 0 : r2(g('f-cost').value);
-  const purchaseDate = g('f-pdate').value;
-  if (!purchaseDate){ g('f-err').textContent = 'Cần nhập ngày mua (để app áp đúng luật 3 hay 4 ngày lãi).'; return; }
-
+  const purchaseDate = g('f-pdate').value || localDate(now());
   if (f.id){
     const label = g('f-label').value.trim();
     const loginId = cleanId(g('f-login').value);
@@ -1038,7 +1200,7 @@ function saveAccount(){
               : (loginId && loginId.length < 4) ? 'ID phải có ít nhất 4 chữ số (hoặc để trống).'
               : (loginId && data.accounts.some(x => x.id !== f.id && x.loginId === loginId)) ? 'ID này đã có ở tài khoản khác.' : '';
     if (err){ g('f-err').textContent = err; return; }
-    Object.assign(accById(f.id), { label, loginId, login4:last4(loginId), color:f.color, cost, purchaseDate, order });
+    Object.assign(accById(f.id), { label, loginId, login4:last4(loginId), cost, purchaseDate, order });
     toast(`Đã lưu ${label}`);
   } else {
     const raw = g('f-login').value.trim();
@@ -1046,14 +1208,14 @@ function saveAccount(){
     if (raw && !plan.length){ g('f-err').textContent = parseIds(raw).length ? 'Các ID này đều đã có trong app.' : 'Không thấy ID hợp lệ (ít nhất 4 chữ số).'; return; }
     const size = +g('f-size').value, phase = g('f-phase').value;
     const fundedDate = phase === 'F' ? g('f-fdate').value : '';
-    const list = plan.length ? plan : [{ loginId:'', color:f.color, label: g('f-label').value.trim() || autoLabel(size, 0) }];
+    const list = plan.length ? plan : [{ loginId:'', label: g('f-label').value.trim() || autoLabel(size, 0) }];
     const shares = splitCost(cost, list.length);
     const batchNo = list.length > 1 ? data.accounts.reduce((m, x) => Math.max(m, +x.batchNo || 0), 0) + 1 : 0;
     let order = list.length > 1
       ? data.accounts.reduce((m, x) => Math.max(m, +x.order || 0), 0) + 1
       : Math.max(1, parseInt(g('f-order').value, 10) || 1);
     for (const p of list){
-      data.accounts.push({ id:uid(), label:p.label, loginId:p.loginId, login4:last4(p.loginId), color:p.color, size, cost:shares.shift(), purchaseDate,
+      data.accounts.push({ id:uid(), label:p.label, loginId:p.loginId, login4:last4(p.loginId), size, cost:shares.shift(), purchaseDate,
                            order:order++, phase, status:'active', fundedDate, goatGuardHits:0, batchNo });
     }
     toast(list.length > 1 ? `Đã thêm ${list.length} tài khoản` : `Đã thêm ${list[0].label}`);
@@ -1078,13 +1240,6 @@ document.addEventListener('click', e => {
     case 'theme': applyTheme(THEMES[(THEMES.indexOf(getTheme()) + 1) % 3]); render(); break;
     case 'st-phase': ui.stPhase = v; render(); break;
     case 'add-account': openAccountForm(null); break;
-    case 'add-combo': {
-      openAccountForm(null);
-      const q = S().COMBO_PRICES[5000].qty;
-      document.getElementById('f-login').placeholder = `Dán ${q} ID của lô combo, mỗi ID 1 dòng`;
-      document.getElementById('f-login-hint').innerHTML = `Dán đủ <b>${q} ID</b> trong mail GFT. App tự tính giá combo và chia đều cho từng tài khoản. Chỉ dán số login, <b>không dán mật khẩu</b>.`;
-      break;
-    }
     case 'manage': openAccountForm(id); break;
     case 'record': openRecord(id); break;
     case 'rec-dir': ui.rec.dir = v; ui.rec.dirTouched = true; keepAmount(); renderRecord(); break;
@@ -1107,7 +1262,12 @@ document.addEventListener('click', e => {
     case 'ord-fill': { const a = accById(ui.ord.id); a.openOrder.filled = true; closeSheet(); save(); toast(`${a.label}: lệnh đã khớp, đang chạy`); break; }
     case 'ord-cancel': { const a = accById(ui.ord.id); delete a.openOrder; closeSheet(); save(); toast(`${a.label}: đã xoá lệnh mở`); break; }
     case 'ord-close': { const aid = ui.ord.id; closeSheet(); openRecord(aid); break; }
-    case 'acc-color': ui.form.color = v; document.getElementById('f-colors').innerHTML = swatches(); updateFormHints(); break;
+    case 'pay-new': openPayoutForm(id || ''); break;
+    case 'pay-save': savePayout(); break;
+    case 'pay-paid': { const pp = data.payouts.find(x => x.id === id); if (pp){ pp.status = 'paid'; pp.paidDate = localDate(now()); save(); toast(`Đã đánh dấu payout ${money(pp.received ?? pp.amount)} đã về`); } break; }
+    case 'pay-del': data.payouts = data.payouts.filter(x => x.id !== id); save(); toast('Đã xoá payout'); break;
+    case 'pay-month': ui.payMonth = shiftMonth(ui.payMonth || localDate(now()).slice(0, 7), +v); render(); break;
+    case 'pay-st': ui.pay.status = v; keepPayInputs(); renderPayForm(); break;
     case 'acc-save': saveAccount(); break;
     case 'acc-pass': passAccount(id); break;
     case 'acc-breach': setBreached(id, true); break;
@@ -1136,9 +1296,11 @@ function keepAmount(){ const el = document.getElementById('r-amt'); if (el && el
 document.addEventListener('input', e => {
   const t = e.target;
   if (ui.rec && t.id === 'r-amt'){ ui.rec.amount = t.value; ui.rec.autoAmount = false; updateRecord(); }
+  if (ui.pay && t.id === 'p-amt' && !ui.pay.recvTouched){ const rv = document.getElementById('p-recv'); rv.value = t.value ? r2(+t.value * paySplit(accById(document.getElementById('p-acc').value)) / 100) : ''; }
+  if (ui.pay && t.id === 'p-recv') ui.pay.recvTouched = true;
   if (ui.form){
     if (t.id === 'f-login' || t.id === 'f-label') updateFormHints();
-    if (t.id === 'f-cost'){ ui.form.costTouched = true; updateFormHints(); }
+    if (t.id === 'f-cost') updateFormHints();
   }
 });
 document.addEventListener('change', e => {
@@ -1150,12 +1312,8 @@ document.addEventListener('change', e => {
     if (!ui.rec.dirTouched) ui.rec.dir = defaultDir(t.value);
     renderRecord();
   }
-  if (ui.form && t.id === 'f-size'){
-    const z = +t.value;
-    if (!ui.form.costTouched) document.getElementById('f-cost').value = S().ACCOUNT_PRICES[z] ?? '';
-    document.getElementById('f-label').placeholder = autoLabel(z, 0);
-    updateFormHints();
-  }
+  if (ui.form && t.id === 'f-size'){ document.getElementById('f-label').placeholder = autoLabel(+t.value, 0); updateFormHints(); }
+  if (ui.pay && t.id === 'p-acc'){ keepPayInputs(); ui.pay.accId = t.value; renderPayForm(); }
   if (ui.form && t.id === 'f-phase') document.getElementById('f-fdate-wrap').hidden = t.value !== 'F';
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !document.getElementById('sheet').hidden) closeSheet(); });
