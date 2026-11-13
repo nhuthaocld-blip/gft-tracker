@@ -1266,6 +1266,16 @@ function openAccountForm(id){
       </div>
       <div class="field"><label for="f-pdate">Ngày mua</label><input id="f-pdate" type="date" value="${esc(a.purchaseDate)}"></div>
       <div class="err" id="f-err"></div><button class="btn primary" data-action="acc-save">Lưu thay đổi</button>`;
+    // Sửa tổng tiền cả lô (các tài khoản mua cùng lúc), app chia đều lại
+    const lot = lotAccounts(a);
+    if (lot.length > 1){
+      const sum = r2(lot.reduce((t, x) => t + (+x.cost || 0), 0));
+      h += `<h3>Lô ${a.batchNo} · ${lot.length} tài khoản</h3>
+        <div class="field"><label for="f-lot">Tổng tiền đã trả cho cả lô ($)</label>
+          <input id="f-lot" type="number" inputmode="decimal" min="0" step="0.01" value="${sum}">
+          <div class="hint">App đang ghi ${money(sum)} cho lô này (${lot.map(x => esc(x.label)).join(', ')}). Sửa thành số đúng rồi bấm lưu, app chia đều lại cho ${lot.length} tài khoản.</div></div>
+        <button class="btn" data-action="lot-save" data-id="${a.id}">Lưu tổng tiền lô</button>`;
+    }
     const recent = data.results.filter(r => r.accountId === a.id).sort((x, y) => y.createdAt - x.createdAt).slice(0, 15);
     h += `<h3>15 kết quả gần nhất</h3>`;
     h += recent.length ? `<div class="list">${recent.map(r => `<div class="li"><span>${fmtDay(r.tradingDay)} · ${PHASES[r.phase]} · ${r.kind === 'adjust' ? 'Đối chiếu' : (r.dir === 'L' ? 'Buy' : 'Sell')} ·
@@ -1301,6 +1311,10 @@ function openAccountForm(id){
   }
   openSheet(h);
   updateFormHints();
+}
+// Các tài khoản mua chung 1 lô (bỏ tài khoản vòng sau tạo ra khi pass, vì chúng không tốn tiền mua)
+function lotAccounts(a){
+  return a && a.batchNo ? data.accounts.filter(x => x.batchNo === a.batchNo && !x.prevId).sort((x, y) => (+x.order || 0) - (+y.order || 0)) : [];
 }
 function autoLabel(size, i){ return `GFT ${sizeLabel(size)} #${data.accounts.length + 1 + i}`; }
 // Danh sách tài khoản sẽ tạo từ ô dán ID (chế độ thêm)
@@ -1440,6 +1454,15 @@ document.addEventListener('click', e => {
     case 'pay-month': ui.payMonth = shiftMonth(ui.payMonth || localDate(now()).slice(0, 7), +v); render(); break;
     case 'pay-st': ui.pay.status = v; keepPayInputs(); renderPayForm(); break;
     case 'acc-save': saveAccount(); break;
+    case 'lot-save': {
+      const a = accById(id), lot = lotAccounts(a), total = r2(document.getElementById('f-lot').value);
+      if (!(total >= 0) || !lot.length) break;
+      const shares = splitCost(total, lot.length);
+      lot.forEach(x => x.cost = shares.shift());
+      save(); openAccountForm(id);
+      toast(`Đã sửa tổng tiền lô ${a.batchNo} thành ${money(total)}`);
+      break;
+    }
     case 'acc-pass': passAccount(id); break;
     case 'acc-breach': setBreached(id, true); break;
     case 'acc-restore': setBreached(id, false); break;
