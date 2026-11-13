@@ -22,6 +22,11 @@ const CONFIG = {
   PLAN_NEXT_TP: 50,     // Kế hoạch của thầy: TP các ngày sau, $. Ngày đầu TP = phần còn thiếu trừ đi các ngày sau
                         //   (Vòng 1: 400 - 2x50 = $300; Vòng 2: 300 - 2x50 = $200; thua thì TP tự nâng lên)
   GOAT_GUARD: 2,        // Ngưỡng Goat Guard, % vốn ban đầu (5k -> $100)
+  // --- Chiến lược vòng Funded (theo thầy) ---
+  FUNDED_SL: 80,        // SL mỗi lệnh ở Funded, $ (thầy: 75-80, khoảng 1.5% vì quỹ chỉ cho tối đa 2%)
+  FUNDED_TARGET: 190,   // Lãi mỗi kỳ rút, $ (thầy: tầm 190-199 thì rút)
+  FUNDED_NEXT_TP: 30,   // TP các ngày sau ở Funded, $ (ngày đầu = 190 - 3x30 = $100; thua thì cộng dồn vào TP này)
+  FUNDED_LOT: "0.05–0.06", // Lot gợi ý ở Funded (chỉ để hiển thị)
   PAYOUT_SPLIT: 100,    // Tỷ lệ chia lợi nhuận (Profit split), %. Bạn mua add-on 100%
   PAYOUT_FIRST_DAYS: 14, // Số ngày sau khi lên Funded mới được rút lần đầu
   PAYOUT_CAP: 6,        // Trần mỗi lần rút ở 2 lần rút đầu, % vốn ban đầu (5k -> $300)
@@ -407,7 +412,7 @@ function compute(acc, today){
   const pays = acc.phase === 'F' ? data.payouts.filter(p => p.accountId === acc.id) : [];
   const balance = r2(size + res.reduce((t, r) => t + +r.pnl, 0) - pays.reduce((t, p) => t + +p.amount, 0));
   const profit = r2(balance - size);
-  const target = acc.phase === 'P1' ? r2(size * s.P1_TARGET / 100) : acc.phase === 'P2' ? r2(size * s.P2_TARGET / 100) : 0;
+  const target = acc.phase === 'P1' ? r2(size * s.P1_TARGET / 100) : acc.phase === 'P2' ? r2(size * s.P2_TARGET / 100) : r2(+s.FUNDED_TARGET || 0);
   const remain = Math.max(0, r2(target - profit));
   const lastPay = pays.map(p => p.requestDate).sort().pop() || '';
   const dayPnl = {};
@@ -419,17 +424,23 @@ function compute(acc, today){
   const minDays = (acc.phase === 'F' && acc.purchaseDate && acc.purchaseDate >= s.NEW_RULE_DATE) ? s.MIN_DAYS_NEW : s.MIN_DAYS;
   const floor = r2(size * (1 - s.MAX_DD / 100));
   const buffer = r2(balance - floor);
-  const slLeft = buffer > 0 ? Math.ceil(buffer / s.SL - 1e-9) - 1 : 0;   // số lệnh SL còn chịu được mà chưa chạm sàn
+  const sl = slFor(acc);
+  const slLeft = buffer > 0 ? Math.ceil(buffer / sl - 1e-9) - 1 : 0;   // số lệnh SL còn chịu được mà chưa chạm sàn
   const todayTrades = trades.filter(r => r.tradingDay === today);
   const ready = acc.phase !== 'F' && remain <= 0 && winDays >= minDays;
   // Kế hoạch TP hôm nay: các ngày còn lại mỗi ngày PLAN_NEXT_TP, hôm nay gánh phần còn thiếu
   const daysLeft = Math.max(1, minDays - winDays);
-  const planNext = Math.max(+s.PLAN_NEXT_TP || 0, r2(size * s.DAY_WIN / 100));
-  const planTP = acc.phase === 'F' || ready ? 0 : r2(Math.max(planNext, remain - (daysLeft - 1) * planNext));
+  const planNext = Math.max(acc.phase === 'F' ? +s.FUNDED_NEXT_TP || 0 : +s.PLAN_NEXT_TP || 0, r2(size * s.DAY_WIN / 100));
+  // Funded: đủ lãi kỳ này và đủ ngày lãi thì dừng, đi rút tiền
+  const payReady = acc.phase === 'F' && remain <= 0 && winDays >= minDays;
+  const planTP = ready || payReady ? 0 : r2(Math.max(planNext, remain - (daysLeft - 1) * planNext));
   const fundedDays = acc.phase === 'F' && acc.fundedDate ? daysBetween(acc.fundedDate, localDate(now())) : null;
-  return { balance, profit, target, remain, winDays, minDays, floor, buffer, slLeft, ready, fundedDays, daysLeft, planNext, planTP,
+  return { balance, profit, target, remain, winDays, minDays, floor, buffer, slLeft, ready, payReady, sl, fundedDays, daysLeft, planNext, planTP,
            tradedToday: todayTrades.length > 0, todayPnl: r2(todayTrades.reduce((t, r) => t + +r.pnl, 0)) };
 }
+
+// SL theo vòng: Funded dùng SL nhỏ hơn (quỹ giới hạn rủi ro 2%)
+function slFor(acc){ return acc && acc.phase === 'F' ? +S().FUNDED_SL || +S().SL : +S().SL; }
 
 // ---------- Trang chính ----------
 function render(){
@@ -518,21 +529,25 @@ function card(a, c, closed){
     h += `<div class="row"><span>${c.remain > 0 ? `Còn thiếu <b>${money(c.remain)}</b> / ${money(c.target)}` : `<b class="pos">Đã đạt mục tiêu ${money(c.target)}</b>`}</span>
           <span>Ngày lãi ${dots(c.winDays, c.minDays)} <b>${c.winDays}/${c.minDays}</b></span></div>`;
   } else {
-    h += `<div class="row"><span>Funded${c.fundedDays != null ? ` <b>${c.fundedDays}</b> ngày` : ''}</span>
-          <span>Ngày lãi kỳ này ${dots(c.winDays, c.minDays)} <b>${c.winDays}/${c.minDays}</b></span></div>`;
+    const pct = c.target > 0 ? Math.max(0, Math.min(1, c.profit / c.target)) * 100 : 0;
+    h += `<div class="bar"><i style="width:${pct}%"></i></div>`;
+    h += `<div class="row"><span>${c.remain > 0 ? `Lãi kỳ rút còn thiếu <b>${money(c.remain)}</b> / ${money(c.target)}` : `<b class="pos">Đủ lãi kỳ rút ${money(c.target)}</b>`}</span>
+          <span>Ngày lãi ${dots(c.winDays, c.minDays)} <b>${c.winDays}/${c.minDays}</b></span></div>
+          <div class="row sub"><span>Funded${c.fundedDays != null ? ` <b>${c.fundedDays}</b> ngày` : ''}</span><span>Lot gợi ý <b>${esc(s.FUNDED_LOT || '')}</b></span></div>`;
   }
   if (a.status !== 'passed') h += `<div class="row sub"><span>Đệm tới sàn (Buffer) <b>${money(c.buffer)}</b></span><span>Chịu thêm <b>${c.slLeft}</b> lệnh SL</span></div>`;
 
   if (!dead){
     if (c.slLeft <= 1) h += `<div class="alert red">⚠ Sát sàn: chỉ còn chịu ${c.slLeft} lệnh SL (sàn ${money(c.floor)})</div>`;
     if (c.ready) h += `<div class="alert green">✓ Đủ điều kiện lên vòng — bấm Quản lý để Pass</div>`;
-    if (a.phase === 'F' && s.SL > a.size * s.GOAT_GUARD / 100)
-      h += `<span class="pill red">Goat Guard: SL ${money(s.SL)} > ngưỡng ${money(a.size * s.GOAT_GUARD / 100)}</span> `;
+    if (c.payReady) h += `<div class="alert green">✓ Đủ ${money(c.target)} và ${c.minDays} ngày lãi — dừng đánh, vào trang 💸 Payout để rút</div>`;
+    if (a.phase === 'F' && c.sl > a.size * s.GOAT_GUARD / 100)
+      h += `<span class="pill red">Goat Guard: SL ${money(c.sl)} > ngưỡng ${money(a.size * s.GOAT_GUARD / 100)}</span> `;
     // Kế hoạch TP: đã đánh hôm nay thì hiện luôn TP cho ngày mai (thua thì TP tự nâng lên)
     if (c.planTP && !a.openOrder){
       const when = c.tradedToday ? 'ngày mai' : closed ? 'ngày tới' : 'hôm nay';
       const steps = [c.planTP, ...Array(c.daysLeft - 1).fill(c.planNext)].map(money).join(' → ');
-      h += `<div class="plan">🎯 TP ${when}: <b class="pos">${money(c.planTP)}</b> · SL <b class="neg">${money(s.SL)}</b>
+      h += `<div class="plan">🎯 TP ${when}: <b class="pos">${money(c.planTP)}</b> · SL <b class="neg">${money(c.sl)}</b>${a.phase === 'F' ? ` · lot ${esc(s.FUNDED_LOT || '')}` : ''}
             <br><span class="muted">Còn thiếu ${money(c.remain)} · lộ trình ${c.daysLeft} ngày lãi: ${steps}</span></div>`;
     }
     if (closed) h += `<span class="pill grey">Cuối tuần — thị trường đóng</span>`;
@@ -1044,7 +1059,7 @@ function saveRecord(){
   delete a.openOrder;                                  // lệnh đã đóng -> bỏ khỏi danh sách lệnh đang mở
   closeSheet(); save();
   const c = compute(a, r.day);
-  toast(`Đã lưu ${a.label}: ${signed(pnl)} → số dư ${money(c.balance)}${c.planTP ? ` · TP ngày mai ${money(c.planTP)}` : c.ready ? ' · đủ điều kiện pass' : ''}`);
+  toast(`Đã lưu ${a.label}: ${signed(pnl)} → số dư ${money(c.balance)}${c.planTP ? ` · TP ngày mai ${money(c.planTP)}` : c.ready ? ' · đủ điều kiện pass' : c.payReady ? ' · đủ điều kiện rút tiền' : ''}`);
   if (c.balance <= c.floor) askBreach(a, c);
 }
 
@@ -1389,7 +1404,7 @@ document.addEventListener('click', e => {
     case 'rec-dir': ui.rec.dir = v; ui.rec.dirTouched = true; keepAmount(); renderRecord(); break;
     case 'rec-out':
       keepAmount();
-      if (v === 'L'){ ui.rec.amount = String(S().SL); ui.rec.autoAmount = true; }
+      if (v === 'L'){ ui.rec.amount = String(slFor(accById(ui.rec.id))); ui.rec.autoAmount = true; }
       else {
         // Thắng: tự điền TP theo kế hoạch (sửa được)
         const pc = compute(accById(ui.rec.id), ui.rec.day);
