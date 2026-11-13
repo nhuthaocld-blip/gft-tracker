@@ -30,7 +30,8 @@ const CONFIG = {
   PAYOUT_SPLIT: 100,    // Tỷ lệ chia lợi nhuận (Profit split), %. Bạn mua add-on 100%
   PAYOUT_FIRST_DAYS: 14, // Số ngày sau khi lên Funded mới được rút lần đầu
   PAYOUT_CAP: 6,        // Trần mỗi lần rút ở 2 lần rút đầu, % vốn ban đầu (5k -> $300)
-  PAYOUT_WARN_DAYS: 2,  // Payout chờ quá số ngày này thì cảnh báo vàng
+  PAYOUT_WARN_DAYS: 2,  // GFT cam kết chi trả trong số NGÀY LÀM VIỆC này (không tính T7, CN); trễ hơn thì được thêm $1,000
+  PAYOUT_FEE: 3,        // Phí xử lý mỗi lần rút, % (GFT: 3%) -> rút $190 về tay ~$184.30
   DAY_RESET_TZ: "America/New_York", // Múi giờ tính ngày giao dịch
   DAY_RESET_HOUR: 17,   // Giờ sang ngày mới theo New York (17 = 5PM)
   SIZES: [5000, 8000, 15000, 25000, 50000, 100000, 150000], // Các size tài khoản để chọn khi thêm
@@ -732,6 +733,15 @@ function renderStats(){
 function shiftMonth(ym, n){ const [y, m] = ym.split('-').map(Number); const t = new Date(Date.UTC(y, m - 1 + n, 1)); return t.toISOString().slice(0, 7); }
 // Tỷ lệ chia lợi nhuận: dính Goat Guard 1 lần thì còn 50%
 function paySplit(a){ return a && +a.goatGuardHits >= 1 ? 50 : +S().PAYOUT_SPLIT || 100; }
+function payFee(){ return Math.max(0, +S().PAYOUT_FEE || 0); }
+function payNet(a, amount){ return r2(amount * paySplit(a) / 100 * (1 - payFee() / 100)); }
+// Đếm ngày làm việc (bỏ T7, CN) từ sau ngày `from` tới hết ngày `to`
+function bizDaysBetween(from, to){
+  let n = 0, d = from;
+  while (d < to){ d = addDays(d, 1); const w = dow(d); if (w !== 0 && w !== 6) n++; }
+  return n;
+}
+function addBizDays(from, n){ let d = from; while (n > 0){ d = addDays(d, 1); const w = dow(d); if (w !== 0 && w !== 6) n--; } return d; }
 // Tình trạng rút tiền của 1 tài khoản Funded
 function payInfo(a){
   const s = S(), today = localDate(now()), c = compute(a, tradingDayAt(now()));
@@ -767,8 +777,8 @@ function renderPayout(){
     h += `<div class="pay-row" style="align-items:flex-start"><div>
         <b>${esc(a.label)}</b> <span class="muted">${a.loginId ? 'ID …' + esc(a.login4) : ''}</span><br>
         Lãi hiện tại <b class="${pi.c.profit >= 0 ? 'pos' : 'neg'}">${signed(pi.c.profit)}</b> · Ngày lãi ${pi.c.winDays}/${pi.c.minDays}<br>
-        <span class="muted">${pi.firstDate ? `Rút lần đầu từ ${fmtDay(pi.firstDate)}${pi.waitDays ? ` (còn ${pi.waitDays} ngày)` : ''} · ` : ''}${isFinite(pi.cap) ? `trần ${money(pi.cap)}/lần` : 'không giới hạn'} · chia ${pi.split}%</span><br>
-        ${pi.ok ? `<span class="pill green">✓ Đủ điều kiện · rút được ≈ ${money(pi.can)}</span>`
+        <span class="muted">${pi.firstDate ? `Rút lần đầu từ ${fmtDay(pi.firstDate)}${pi.waitDays ? ` (còn ${pi.waitDays} ngày)` : ''} · ` : ''}${isFinite(pi.cap) ? `trần ${money(pi.cap)}/lần` : 'không giới hạn'} · chia ${pi.split}% · phí ${payFee()}%</span><br>
+        ${pi.ok ? `<span class="pill green">✓ Đủ điều kiện · rút ≈ ${money(pi.can)} → về tay ≈ ${money(payNet(a, pi.can))}</span>`
                 : `<span class="pill yellow">Chưa đủ: ${[pi.waitDays ? `chờ ${pi.waitDays} ngày` : '', pi.needDays ? `thiếu ${pi.needDays} ngày lãi` : '', pi.c.profit <= 0 ? 'chưa có lãi' : ''].filter(Boolean).join(', ')}</span>`}
       </div><div class="r"><button class="btn sm" data-action="pay-new" data-id="${a.id}">+ Ghi</button></div></div>`;
   }
@@ -803,12 +813,14 @@ function renderPayout(){
   h += `<section class="st-card"><h2>Lịch sử payout</h2>`;
   if (!hist.length) h += `<div class="note">Chưa có payout nào.</div>`;
   for (const p of hist){
-    const a = accById(p.accountId), late = p.status !== 'paid' && daysBetween(p.requestDate, today) > (+S().PAYOUT_WARN_DAYS || 2);
+    const a = accById(p.accountId), lim = +S().PAYOUT_WARN_DAYS || 2;
+    const waited = bizDaysBetween(p.requestDate, today), due = addBizDays(p.requestDate, lim), late = p.status !== 'paid' && today > due;
     h += `<div class="pay-row"><div>
         <b>${a ? esc(a.label) : 'Tài khoản đã xoá'}</b> · ${fmtDay(p.requestDate)}<br>
         Rút <b>${money(p.amount)}</b> · nhận <b class="pos">${money(p.received ?? p.amount)}</b><br>
         ${p.status === 'paid' ? `<span class="pill green">Đã về${p.paidDate ? ' ' + fmtDay(p.paidDate) : ''}</span>`
-          : `<span class="pill ${late ? 'red' : 'yellow'}">Đang chờ ${daysBetween(p.requestDate, today)} ngày${late ? ' — quá hạn' : ''}</span>`}
+          : `<span class="pill ${late ? 'red' : 'yellow'}">Đang chờ ${waited} ngày làm việc · hạn ${fmtDay(due)}</span>
+             ${late ? `<div class="alert red">⚠ GFT trễ quá ${lim} ngày làm việc — đủ điều kiện nhận thêm $1,000, nên liên hệ support</div>` : ''}`}
       </div><div class="r">${p.status !== 'paid' ? `<button class="btn sm" data-action="pay-paid" data-id="${p.id}">Đã về</button>` : ''}
         <button class="btn sm danger" data-action="pay-del" data-id="${p.id}" data-confirm>Xoá</button></div></div>`;
   }
@@ -830,7 +842,7 @@ function renderPayForm(){
   const r = ui.pay, funded = data.accounts.filter(a => a.phase === 'F' && a.status !== 'passed'), a = accById(r.accId), pi = payInfo(a);
   let h = sheetHead('Ghi payout');
   h += `<div class="field"><label for="p-acc">Tài khoản</label><select id="p-acc">${funded.map(x => `<option value="${x.id}" ${x.id === r.accId ? 'selected' : ''}>${esc(x.label)}${x.loginId ? ' · …' + esc(x.login4) : ''}</option>`).join('')}</select>
-        <div class="hint">Lãi hiện tại ${signed(pi.c.profit)} · ${isFinite(pi.cap) ? `trần lần này ${money(pi.cap)}` : 'không giới hạn'} · chia ${pi.split}%</div></div>`;
+        <div class="hint">Lãi hiện tại ${signed(pi.c.profit)} · ${isFinite(pi.cap) ? `trần lần này ${money(pi.cap)}` : 'không giới hạn'} · chia ${pi.split}% · phí ${payFee()}%</div></div>`;
   h += `<div class="two">
       <div class="field"><label for="p-amt">Số tiền rút ($)</label><input id="p-amt" type="number" inputmode="decimal" min="0" step="0.01" value="${esc(r.amount)}" placeholder="${pi.can ? r2(pi.can) : ''}"></div>
       <div class="field"><label for="p-recv">Thực nhận ($)</label><input id="p-recv" type="number" inputmode="decimal" min="0" step="0.01" value="${esc(r.received)}"></div>
@@ -845,7 +857,7 @@ function renderPayForm(){
 }
 function savePayout(){
   keepPayInputs();
-  const r = ui.pay, amount = r2(r.amount), received = r.received === '' ? r2(amount * paySplit(accById(r.accId)) / 100) : r2(r.received);
+  const r = ui.pay, amount = r2(r.amount), received = r.received === '' ? payNet(accById(r.accId), amount) : r2(r.received);
   if (!(amount > 0)){ document.getElementById('p-err').textContent = 'Nhập số tiền rút.'; return; }
   if (!r.date){ document.getElementById('p-err').textContent = 'Chọn ngày yêu cầu rút.'; return; }
   data.payouts.push({ id:uid(), accountId:r.accId, amount, received, requestDate:r.date, status:r.status,
@@ -1455,7 +1467,7 @@ function keepAmount(){ const el = document.getElementById('r-amt'); if (el && el
 document.addEventListener('input', e => {
   const t = e.target;
   if (ui.rec && t.id === 'r-amt'){ ui.rec.amount = t.value; ui.rec.autoAmount = false; updateRecord(); }
-  if (ui.pay && t.id === 'p-amt' && !ui.pay.recvTouched){ const rv = document.getElementById('p-recv'); rv.value = t.value ? r2(+t.value * paySplit(accById(document.getElementById('p-acc').value)) / 100) : ''; }
+  if (ui.pay && t.id === 'p-amt' && !ui.pay.recvTouched){ const rv = document.getElementById('p-recv'); rv.value = t.value ? payNet(accById(document.getElementById('p-acc').value), +t.value) : ''; }
   if (ui.pay && t.id === 'p-recv') ui.pay.recvTouched = true;
   if (ui.form){
     if (t.id === 'f-login' || t.id === 'f-label') updateFormHints();
