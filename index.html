@@ -27,6 +27,10 @@ const CONFIG = {
   FUNDED_TARGET: 190,   // Lãi mỗi kỳ rút, $ (thầy: tầm 190-199 thì rút)
   FUNDED_NEXT_TP: 30,   // TP các ngày sau ở Funded, $ (ngày đầu = 190 - 3x30 = $100; thua thì cộng dồn vào TP này)
   FUNDED_LOT: "0.05–0.06", // Lot gợi ý ở Funded (chỉ để hiển thị)
+  // --- Phí giao dịch (commission), app tự trừ mỗi khi ghi kết quả ---
+  COMMISSION_PER_LOT: 5, // Phí cho mỗi 1 lot, $ (0.06 lot ≈ $0.30)
+  LOT_CHALLENGE: 0.13,  // Lot thường đánh ở Vòng 1 và Vòng 2 -> phí ≈ $0.65/lệnh
+  LOT_FUNDED: 0.06,     // Lot thường đánh ở Funded -> phí ≈ $0.30/lệnh
   PAYOUT_SPLIT: 100,    // Tỷ lệ chia lợi nhuận (Profit split), %. Bạn mua add-on 100%
   PAYOUT_FIRST_DAYS: 14, // Số ngày sau khi lên Funded mới được rút lần đầu
   PAYOUT_CAP: 6,        // Trần mỗi lần rút ở 2 lần rút đầu, % vốn ban đầu (5k -> $300)
@@ -1016,10 +1020,16 @@ function defaultDir(day){
   const t = data.results.filter(r => r.kind !== 'adjust' && r.tradingDay === day && r.dir).sort((a, b) => b.createdAt - a.createdAt)[0];
   return t ? t.dir : null;
 }
+function lotFor(a){
+  const ol = a && a.openOrder && parseFloat(String(a.openOrder.lot).replace(',', '.'));
+  if (ol > 0) return ol;
+  return a && a.phase === 'F' ? +S().LOT_FUNDED || 0 : +S().LOT_CHALLENGE || 0;
+}
+function feeFor(a){ return r2(lotFor(a) * (+S().COMMISSION_PER_LOT || 0)); }
 function openRecord(id){
   const today = tradingDayAt(now());
   const oo = (accById(id) || {}).openOrder;
-  ui.rec = { id, day: today, dir: oo ? ORDER_TYPES[oo.type].dir : defaultDir(today), dirTouched: !!oo, out:null, amount:'', autoAmount:false };
+  ui.rec = { id, day: today, dir: oo ? ORDER_TYPES[oo.type].dir : defaultDir(today), dirTouched: !!oo, out:null, amount:'', autoAmount:false, fee:String(feeFor(accById(id))) };
   renderRecord();
 }
 function renderRecord(){
@@ -1040,9 +1050,12 @@ function renderRecord(){
   h += `<div class="field"><div class="lbl">Kết quả</div><div class="seg">
           <button class="g ${r.out === 'W' ? 'on' : ''}" data-action="rec-out" data-v="W">Thắng</button>
           <button class="r ${r.out === 'L' ? 'on' : ''}" data-action="rec-out" data-v="L">Thua</button></div></div>`;
-  h += `<div class="field"><label for="r-amt">Số tiền ($, luôn nhập số dương)</label>
-        <input type="number" id="r-amt" inputmode="decimal" min="0" step="0.01" placeholder="Ví dụ 300" value="${esc(r.amount)}">
-        <div class="hint">Nhập số lãi/lỗ <b>đã trừ phí</b> đúng như MT5 hiện.</div></div>`;
+  h += `<div class="two">
+        <div class="field"><label for="r-amt">Số tiền TP/SL ($)</label>
+          <input type="number" id="r-amt" inputmode="decimal" min="0" step="0.01" placeholder="Ví dụ 300" value="${esc(r.amount)}"></div>
+        <div class="field"><label for="r-fee">Phí lệnh ($)</label>
+          <input type="number" id="r-fee" inputmode="decimal" min="0" step="0.01" value="${esc(r.fee)}"></div></div>
+        <div class="hint" style="margin:-8px 0 14px">Nhập số TP/SL <b>chưa trừ phí</b>, luôn là số dương. App tự trừ phí lệnh (${lotFor(a)} lot × $${+S().COMMISSION_PER_LOT || 0}/lot). Sửa ô phí nếu khác.</div>`;
   h += `<div class="summary" id="r-sum"></div>`;
   h += `<button class="btn primary" id="r-save" data-action="rec-save">Lưu</button>`;
   openSheet(h);
@@ -1054,9 +1067,10 @@ function updateRecord(){
   const a = accById(r.id);
   const sum = document.getElementById('r-sum');
   if (recordValid()){
-    const pnl = r.out === 'W' ? +r.amount : -r.amount;
+    const gross = r.out === 'W' ? +r.amount : -r.amount, fee = Math.max(0, +r.fee || 0), pnl = r2(gross - fee);
     const c = compute(a, r.day);
-    sum.innerHTML = `Sẽ ghi: <b class="${pnl > 0 ? 'pos' : 'neg'}">${r.out === 'W' ? 'Thắng' : 'Thua'} ${signed(pnl)}</b> · ${r.dir === 'L' ? 'Long' : 'Short'} · ${fmtDay(r.day)}<br>
+    sum.innerHTML = `Sẽ ghi: <b class="${pnl > 0 ? 'pos' : 'neg'}">${r.out === 'W' ? 'Thắng' : 'Thua'} ${signed(pnl)}</b> · ${r.dir === 'L' ? 'Buy' : 'Sell'} · ${fmtDay(r.day)}
+                     ${fee ? `<br><span class="muted">${signed(gross)} − phí ${money(fee)}</span>` : ''}<br>
                      Số dư sau khi lưu: <b>${money(c.balance + pnl)}</b>`;
   } else {
     sum.textContent = 'Chọn hướng, kết quả và nhập số tiền.';
@@ -1066,8 +1080,8 @@ function updateRecord(){
 function saveRecord(){
   if (!recordValid()) return;
   const r = ui.rec, a = accById(r.id);
-  const pnl = r2(r.out === 'W' ? +r.amount : -r.amount);
-  data.results.push({ id:uid(), accountId:a.id, phase:a.phase, tradingDay:r.day, dir:r.dir, pnl, kind:'trade', createdAt:Date.now() });
+  const gross = r2(r.out === 'W' ? +r.amount : -r.amount), fee = r2(Math.max(0, +r.fee || 0)), pnl = r2(gross - fee);
+  data.results.push({ id:uid(), accountId:a.id, phase:a.phase, tradingDay:r.day, dir:r.dir, pnl, gross, fee, kind:'trade', createdAt:Date.now() });
   delete a.openOrder;                                  // lệnh đã đóng -> bỏ khỏi danh sách lệnh đang mở
   closeSheet(); save();
   const c = compute(a, r.day);
@@ -1490,6 +1504,7 @@ function keepAmount(){ const el = document.getElementById('r-amt'); if (el && el
 document.addEventListener('input', e => {
   const t = e.target;
   if (ui.rec && t.id === 'r-amt'){ ui.rec.amount = t.value; ui.rec.autoAmount = false; updateRecord(); }
+  if (ui.rec && t.id === 'r-fee'){ ui.rec.fee = t.value; updateRecord(); }
   if (ui.pay && t.id === 'p-amt' && !ui.pay.recvTouched){ const rv = document.getElementById('p-recv'); rv.value = t.value ? payNet(accById(document.getElementById('p-acc').value), +t.value) : ''; }
   if (ui.pay && t.id === 'p-recv') ui.pay.recvTouched = true;
   if (ui.form){
