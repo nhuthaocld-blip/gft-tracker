@@ -528,8 +528,13 @@ function card(a, c, closed){
     if (c.ready) h += `<div class="alert green">✓ Đủ điều kiện lên vòng — bấm Quản lý để Pass</div>`;
     if (a.phase === 'F' && s.SL > a.size * s.GOAT_GUARD / 100)
       h += `<span class="pill red">Goat Guard: SL ${money(s.SL)} > ngưỡng ${money(a.size * s.GOAT_GUARD / 100)}</span> `;
-    if (c.planTP && !c.tradedToday && !a.openOrder)
-      h += `<div class="plan">🎯 Kế hoạch ${closed ? 'ngày tới' : 'hôm nay'}: TP <b class="pos">${money(c.planTP)}</b> · SL <b class="neg">${money(s.SL)}</b>${c.daysLeft > 1 ? `<br><span class="muted">Sau đó ${c.daysLeft - 1} ngày, mỗi ngày TP ${money(c.planNext)}</span>` : ''}</div>`;
+    // Kế hoạch TP: đã đánh hôm nay thì hiện luôn TP cho ngày mai (thua thì TP tự nâng lên)
+    if (c.planTP && !a.openOrder){
+      const when = c.tradedToday ? 'ngày mai' : closed ? 'ngày tới' : 'hôm nay';
+      const steps = [c.planTP, ...Array(c.daysLeft - 1).fill(c.planNext)].map(money).join(' → ');
+      h += `<div class="plan">🎯 TP ${when}: <b class="pos">${money(c.planTP)}</b> · SL <b class="neg">${money(s.SL)}</b>
+            <br><span class="muted">Còn thiếu ${money(c.remain)} · lộ trình ${c.daysLeft} ngày lãi: ${steps}</span></div>`;
+    }
     if (closed) h += `<span class="pill grey">Cuối tuần — thị trường đóng</span>`;
     else h += c.tradedToday
       ? `<span class="pill green">Đã đánh hôm nay ${signed(c.todayPnl)}</span>`
@@ -1039,7 +1044,7 @@ function saveRecord(){
   delete a.openOrder;                                  // lệnh đã đóng -> bỏ khỏi danh sách lệnh đang mở
   closeSheet(); save();
   const c = compute(a, r.day);
-  toast(`Đã lưu ${a.label}: ${signed(pnl)} → số dư ${money(c.balance)}`);
+  toast(`Đã lưu ${a.label}: ${signed(pnl)} → số dư ${money(c.balance)}${c.planTP ? ` · TP ngày mai ${money(c.planTP)}` : c.ready ? ' · đủ điều kiện pass' : ''}`);
   if (c.balance <= c.floor) askBreach(a, c);
 }
 
