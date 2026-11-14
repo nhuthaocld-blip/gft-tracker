@@ -31,6 +31,9 @@ const CONFIG = {
   COMMISSION_PER_LOT: 5, // Phí cho mỗi 1 lot, $ (0.06 lot ≈ $0.30)
   LOT_CHALLENGE: 0.13,  // Lot thường đánh ở Vòng 1 và Vòng 2 -> phí ≈ $0.65/lệnh
   LOT_FUNDED: 0.06,     // Lot thường đánh ở Funded -> phí ≈ $0.30/lệnh
+  // --- Số lệnh tối đa mỗi ngày ---
+  MAX_TRADES_CHALLENGE: 1, // Vòng 1, Vòng 2: 1 lệnh/ngày, thắng thua đều dừng
+  MAX_TRADES_FUNDED: 2,    // Funded: tối đa 2 lệnh/ngày (thầy: mỗi lệnh ~1.5%, ngày tối đa 4%); thắng thì dừng
   PAYOUT_SPLIT: 100,    // Tỷ lệ chia lợi nhuận (Profit split), %. Bạn mua add-on 100%
   PAYOUT_FIRST_DAYS: 14, // Số ngày sau khi lên Funded mới được rút lần đầu
   PAYOUT_CAP: 6,        // Trần mỗi lần rút ở 2 lần rút đầu, % vốn ban đầu (5k -> $300)
@@ -441,9 +444,30 @@ function compute(acc, today){
   const planTP = ready || payReady ? 0 : r2(Math.max(planNext, remain - (daysLeft - 1) * planNext));
   const fundedDays = acc.phase === 'F' && acc.fundedDate ? daysBetween(acc.fundedDate, localDate(now())) : null;
   return { balance, profit, target, remain, winDays, minDays, floor, buffer, slLeft, ready, payReady, sl, fundedDays, daysLeft, planNext, planTP,
-           tradedToday: todayTrades.length > 0, todayPnl: r2(todayTrades.reduce((t, r) => t + +r.pnl, 0)) };
+           tradedToday: todayTrades.length > 0, todayPnl: r2(todayTrades.reduce((t, r) => t + +r.pnl, 0)),
+           ...dayLimit(acc, todayTrades, size) };
 }
 
+// Cảnh báo khi vào thêm lệnh trong ngày
+function dayTradesWarn(a, day){
+  const c = compute(a, day);
+  if (!c.tradesToday) return '';
+  if (c.doneToday)
+    return `<div class="alert red" style="margin:0 0 12px">⛔ Đã đủ lệnh hôm nay (${c.tradesToday}/${c.maxTrades}${c.wonToday && c.tradesToday < c.maxTrades ? ', đã thắng' : ''}). Theo quy tắc phải dừng.</div>`;
+  const risky = c.dayLossLeft < c.sl + feeFor(a);
+  return `<div class="alert ${risky ? 'red' : 'yellow'}" style="margin:0 0 12px">${risky ? '⛔' : '⚠'} Lệnh thứ ${c.tradesToday + 1}/${c.maxTrades} hôm nay · đã ${signed(c.todayPnl)} · còn được lỗ ${money(c.dayLossLeft)} trước giới hạn ngày ${money(c.dayLossLimit)}.</div>`;
+}
+// Giới hạn lệnh trong ngày: Vòng 1-2 một lệnh, Funded tối đa 2 lệnh; đã thắng (đủ ngày lãi) thì dừng
+function maxTradesFor(acc){ return acc && acc.phase === 'F' ? +S().MAX_TRADES_FUNDED || 2 : +S().MAX_TRADES_CHALLENGE || 1; }
+function dayLimit(acc, todayTrades, size){
+  const s = S(), maxTrades = maxTradesFor(acc), tradesToday = todayTrades.length;
+  const todayPnl = r2(todayTrades.reduce((t, r) => t + +r.pnl, 0));
+  const wonToday = tradesToday > 0 && todayPnl >= r2(size * s.DAY_WIN / 100);
+  const doneToday = tradesToday >= maxTrades || wonToday;
+  const dayLossLimit = r2(size * s.DAILY_DD / 100);
+  return { maxTrades, tradesToday, wonToday, doneToday, tradesLeft: doneToday ? 0 : maxTrades - tradesToday,
+           dayLossLimit, dayLossLeft: r2(dayLossLimit + Math.min(0, todayPnl)) };
+}
 // SL theo vòng: Funded dùng SL nhỏ hơn (quỹ giới hạn rủi ro 2%)
 function slFor(acc){ return acc && acc.phase === 'F' ? +S().FUNDED_SL || +S().SL : +S().SL; }
 
@@ -493,7 +517,7 @@ function render(){
     return ui.filter === 'active' || a.phase === ui.filter;
   }).sort((a, b) => {
     // Chưa đánh hôm nay lên trước; trong mỗi nhóm giữ thứ tự đánh cố định của bạn
-    const ta = a.openOrder ? -1 : comp.get(a.id).tradedToday ? 1 : 0, tb = b.openOrder ? -1 : comp.get(b.id).tradedToday ? 1 : 0;
+    const ta = a.openOrder ? -1 : comp.get(a.id).doneToday ? 1 : 0, tb = b.openOrder ? -1 : comp.get(b.id).doneToday ? 1 : 0;
     return (ta - tb) || ((+a.order || 0) - (+b.order || 0)) || a.label.localeCompare(b.label);
   });
 
@@ -519,7 +543,7 @@ function card(a, c, closed){
   const dead = !isLive(a), s = S();
   const tagTxt = a.status === 'breached' ? 'Đã cháy · ' + PHASES[a.phase] : a.status === 'passed' ? '✓ Đã pass ' + PHASES[a.phase] : PHASES[a.phase];
   const tagCls = a.status === 'breached' ? 'tag-dead' : a.status === 'passed' ? 'tag-pass' : 'tag-' + a.phase;
-  let h = `<article class="card ${a.status === 'passed' ? 'passed' : dead ? 'dead' : (!closed && c.tradedToday ? 'done' : '')}" style="--acc:${dirColor(a)}">`;
+  let h = `<article class="card ${a.status === 'passed' ? 'passed' : dead ? 'dead' : (!closed && c.doneToday ? 'done' : '')}" style="--acc:${dirColor(a)}">`;
   h += `<div class="c-top"><div><div class="c-name">${esc(a.label)}</div>
         <div class="c-sub">${sizeLabel(a.size)}${a.batchNo ? ' · Lô ' + a.batchNo : ''} · ${a.loginId
           ? `<button class="idbtn" data-action="copy-id" data-v="${esc(a.loginId)}" title="Bấm để sao chép ID">ID ${idHtml(a.loginId)} <span class="cp">⧉</span></button>`
@@ -550,15 +574,16 @@ function card(a, c, closed){
       h += `<span class="pill red">Goat Guard: SL ${money(c.sl)} > ngưỡng ${money(a.size * s.GOAT_GUARD / 100)}</span> `;
     // Kế hoạch TP: đã đánh hôm nay thì hiện luôn TP cho ngày mai (thua thì TP tự nâng lên)
     if (c.planTP && !a.openOrder){
-      const when = c.tradedToday ? 'ngày mai' : closed ? 'ngày tới' : 'hôm nay';
+      const when = c.doneToday ? 'ngày mai' : closed ? 'ngày tới' : c.tradedToday ? 'lệnh tiếp hôm nay' : 'hôm nay';
       const steps = [c.planTP, ...Array(c.daysLeft - 1).fill(c.planNext)].map(money).join(' → ');
       h += `<div class="plan">🎯 TP ${when}: <b class="pos">${money(c.planTP)}</b> · SL <b class="neg">${money(c.sl)}</b>${a.phase === 'F' ? ` · lot ${esc(s.FUNDED_LOT || '')}` : ''}
             <br><span class="muted">Còn thiếu ${money(c.remain)} · lộ trình ${c.daysLeft} ngày lãi: ${steps}</span></div>`;
     }
     if (closed) h += `<span class="pill grey">Cuối tuần — thị trường đóng</span>`;
-    else h += c.tradedToday
-      ? `<span class="pill green">Đã đánh hôm nay ${signed(c.todayPnl)}</span>`
-      : `<span class="pill yellow">Chưa đánh hôm nay</span>`;
+    else if (!c.tradedToday) h += `<span class="pill yellow">Chưa đánh hôm nay${c.maxTrades > 1 ? ` · tối đa ${c.maxTrades} lệnh` : ''}</span>`;
+    else if (c.doneToday) h += `<span class="pill green">Xong hôm nay ${signed(c.todayPnl)}${c.maxTrades > 1 ? ` · ${c.tradesToday}/${c.maxTrades} lệnh${c.wonToday && c.tradesToday < c.maxTrades ? ' (đã thắng, dừng)' : ''}` : ''}</span>`;
+    else h += `<span class="pill yellow">Đã đánh ${c.tradesToday}/${c.maxTrades} lệnh ${signed(c.todayPnl)} · còn ${c.tradesLeft} lệnh hôm nay</span>
+               ${c.dayLossLeft < c.sl + feeFor(a) ? `<div class="alert red">⚠ Lỗ hôm nay ${money(-c.todayPnl)}: thua thêm 1 lệnh SL ${money(c.sl)} sẽ vượt giới hạn ngày ${money(c.dayLossLimit)}</div>` : ''}`;
     if (a.openOrder) h += orderBox(a, tradingDayAt(now()));
     h += dirLine(a);
     h += `<div class="c-btns"><button class="btn primary" data-action="record" data-id="${a.id}">Ghi kết quả</button>
@@ -1046,7 +1071,7 @@ function renderRecord(){
           <button class="g ${r.dir === 'L' ? 'on' : ''}" data-action="rec-dir" data-v="L">▲ Buy (Long)</button>
           <button class="r ${r.dir === 'S' ? 'on' : ''}" data-action="rec-dir" data-v="S">▼ Sell (Short)</button></div>
         ${r.dir && !r.dirTouched ? '<div class="hint">Tự chọn theo hướng đã ghi trước đó trong ngày</div>' : ''}</div>`;
-  h += dirWarn(a, r.dir, r.day);
+  h += dirWarn(a, r.dir, r.day) + dayTradesWarn(a, r.day);
   h += `<div class="field"><div class="lbl">Kết quả</div><div class="seg">
           <button class="g ${r.out === 'W' ? 'on' : ''}" data-action="rec-out" data-v="W">Thắng</button>
           <button class="r ${r.out === 'L' ? 'on' : ''}" data-action="rec-out" data-v="L">Thua</button></div></div>`;
@@ -1165,11 +1190,10 @@ function renderOrder(){
   if (r.type){
     const hedge = hedgeWith(a.id, ORDER_TYPES[r.type].dir, today);
     if (hedge.length) h += `<div class="alert yellow" style="margin:0 0 12px">⚠ Đối lệnh: ${esc(hedge.join(', '))} đang/đã đánh hướng ngược lại hôm nay.</div>`;
-    if (!o && data.results.some(x => x.accountId === a.id && x.kind !== 'adjust' && x.tradingDay === today))
-      h += `<div class="alert yellow" style="margin:0 0 12px">⚠ Tài khoản này đã đánh 1 lệnh hôm nay.</div>`;
+    if (!o) h += dayTradesWarn(a, today);
   }
-  const dw = r.type ? dirWarn(a, ORDER_TYPES[r.type].dir, today) : '';
-  h += dw;
+  const dw = (r.type ? dirWarn(a, ORDER_TYPES[r.type].dir, today) : '') + (!o && r.type && dayTradesWarn(a, today).includes('⛔') ? '⛔' : '');
+  h += dw.replace(/⛔$/, '');
   h += `<button class="btn primary" data-action="ord-save" ${r.type ? '' : 'disabled'} ${dw.includes('⛔') ? 'data-confirm' : ''}>${o ? 'Lưu thay đổi' : 'Lưu lệnh'}${dw.includes('⛔') ? ' (sai quy tắc)' : ''}</button>`;
   openSheet(h);
 }
